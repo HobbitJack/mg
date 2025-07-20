@@ -115,7 +115,7 @@ static int	 timesh  = FALSE;
 static int	 battsh  = FALSE;
 
 /* For display-time-mode */
-static char formats[20] = "  %H:%M";
+static char  formats[20] = "%H:%M";
 
 static int	 visual_mark = TRUE;	/* draw region after set-mark	*/
 static int	 font_lock = TRUE;	/* syntax highlighting		*/
@@ -533,21 +533,15 @@ timeformat(int f, int n)
 {
 	char* buf = malloc(20 * sizeof(char));
 
-	memmove(formats, &formats[2], 18);
-
 	if ((buf = eread("Time format: ", formats, NFILEN,
 	    EFDEF | EFNEW | EFCR | EFFILE)) == NULL)
 		return (ABORT);
 	else if (buf[0] == '\0')
 		return (FALSE);
-	else if (strlen(buf) >= 18)
+	else if (strlen(buf) >= 20)
 		return (ABORT);
 	
-	memmove(&buf[2], buf, 18);
-	buf[0] = ' ';
-	buf[1] = ' ';
 	strcpy(formats, buf);
-		
 	return (TRUE);
 }
 
@@ -1476,6 +1470,8 @@ modeline(struct mgwin *wp, int modelinecolor)
 		
 		now = time(NULL);
 		strftime(buf, sizeof(buf), formats, localtime(&now));
+		
+		n += vtputs("  ", wp);
 		n += vtputs(buf, wp);
 	}
 
