@@ -10,7 +10,8 @@ mg_SOURCES       = basic.c bell.c buffer.c cinfo.c dir.c display.c echo.c 	\
 		   kbd.c keymap.c line.c macro.c main.c match.c modes.c		\
 		   paragraph.c region.c search.c spawn.c tty.c ttyio.c ttykbd.c	\
 		   ttydef.h undo.c util.c version.c window.c word.c yank.c	\
-		   chrdef.h def.h funmap.h kbd.h key.h macro.h pathnames.h
+		   chrdef.h def.h funmap.h kbd.h key.h macro.h pathnames.h      \
+		   battery.h battery.c
 mg_SOURCES      += queue.h tree.h
 mg_SOURCES      += extensions.c
 

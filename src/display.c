@@ -22,6 +22,8 @@
 #include "def.h"
 #include "kbd.h"
 
+#include "battery.h"
+
 /*
  * A video structure always holds
  * an array of characters whose length is equal to
@@ -93,6 +95,10 @@ struct score *score;			/* [NROW * NROW] */
 static int	 linenos = TRUE;
 static int	 colnos  = TRUE;
 static int	 timesh  = FALSE;
+static int	 battsh  = FALSE;
+
+/* For display-time-mode */
+static char formats[20] = "  %H:%M";
 
 /* Is macro recording enabled? */
 extern int macrodef;
@@ -134,6 +140,42 @@ timetoggle(int f, int n)
 		timesh = n > 0;
 	else
 		timesh = !timesh;
+
+	sgarbf = TRUE;
+
+	return (TRUE);
+}
+
+int
+timeformat(int f, int n)
+{
+	char* buf = malloc(20 * sizeof(char));
+
+	memmove(formats, &formats[2], 18);
+
+	if ((buf = eread("Time format: ", formats, NFILEN,
+	    EFDEF | EFNEW | EFCR | EFFILE)) == NULL)
+		return (ABORT);
+	else if (buf[0] == '\0')
+		return (FALSE);
+	else if (strlen(buf) >= 18)
+		return (ABORT);
+	
+	memmove(&buf[2], buf, 18);
+	buf[0] = ' ';
+	buf[1] = ' ';
+	strcpy(formats, buf);
+		
+	return (TRUE);
+}
+
+int
+batttoggle(int f, int n)
+{
+	if (f & FFARG)
+		battsh = n > 0;
+	else
+		battsh = !battsh;
 
 	sgarbf = TRUE;
 
@@ -870,13 +912,22 @@ modeline(struct mgwin *wp, int modelinecolor)
 	vtputc(')', wp);
 	++n;
 
-	/* Show time/date/mail */
+	/* Show time/date */
 	if (timesh) {
-		char buf[20];
+		
+		char buf[40];
 		time_t now;
-
+		
 		now = time(NULL);
-		strftime(buf, sizeof(buf), "  %H:%M", localtime(&now));
+		strftime(buf, sizeof(buf), formats, localtime(&now));
+		n += vtputs(buf, wp);
+	}
+
+	/* Show battery */
+	if (battsh) {
+		char buf[7];
+		
+		snprintf(buf, 7, "  %d%%", get_battery_percentage());
 		n += vtputs(buf, wp);
 	}
 

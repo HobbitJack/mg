@@ -105,8 +105,10 @@ static struct funmap functnames[] = {
 #ifdef ENABLE_DIRED
 	{dired_jump, "dired-jump", 1, NULL},
 #endif
+	{batttoggle, "display-battery-mode", 0, NULL},
 	{helptoggle, "display-help-mode", 0, NULL},
 	{timetoggle, "display-time-mode", 0, NULL},
+	{timeformat, "set-time-format", 1, NULL},
 	{lowerregion, "downcase-region", 0, NULL},
 	{lowerword, "downcase-word", 1, NULL},
 	{showversion, "emacs-version", 0, NULL},

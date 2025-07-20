@@ -552,6 +552,8 @@ void		 update(int);
 int		 linenotoggle(int, int);
 int		 colnotoggle(int, int);
 int		 timetoggle(int, int);
+int		 timeformat(int, int);
+int		 batttoggle(int, int);
 
 /* echo.c X */
 int		 helptoggle(int, int);
