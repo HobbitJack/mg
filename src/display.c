@@ -24,6 +24,8 @@
 
 #include "battery.h"
 
+static int gap = 4;
+
 /*
  * A video structure always holds
  * an array of characters whose length is equal to
@@ -96,6 +98,8 @@ static int	 linenos = TRUE;
 static int	 colnos  = TRUE;
 static int	 timesh  = FALSE;
 static int	 battsh  = FALSE;
+
+static int       displno = TRUE;
 
 /* For display-time-mode */
 static char  formats[20] = "%H:%M";
@@ -170,6 +174,24 @@ batttoggle(int f, int n)
 		battsh = n > 0;
 	else
 		battsh = !battsh;
+
+	sgarbf = TRUE;
+
+	return (TRUE);
+}
+
+int
+displnotoggle(int f, int n)
+{
+	if (f & FFARG)
+		displno = n > 0;
+	else
+		displno = !displno;
+
+	if (displno)
+		gap = 4;
+	else
+		gap = 0;
 
 	sgarbf = TRUE;
 
@@ -370,12 +392,12 @@ vtputc(int c, struct mgwin *wp)
 		target = ntabstop(vtcol, wp->w_bufp->b_tabw);
 		do {
 			vtputc(' ', wp);
-		} while (vtcol < ncol && vtcol < target);
+		} while ((vtcol < ncol) && (vtcol < target));
 	} else if (ISCTRL(c)) {
 		vtputc('^', wp);
 		vtputc(CCHR(c), wp);
 	} else if (isprint(c))
-		vp->v_text[vtcol++] = c;
+		vp->v_text[gap + (vtcol++)] = c;
 	else {
 		char bf[5];
 
@@ -404,13 +426,13 @@ vtpute(int c, struct mgwin *wp)
 		target = ntabstop(vtcol + lbound, wp->w_bufp->b_tabw);
 		do {
 			vtpute(' ', wp);
-		} while (((vtcol + lbound) < target) && vtcol < ncol);
+		} while (((vtcol + lbound) < target) && vtcol < (ncol));
 	} else if (ISCTRL(c) != FALSE) {
 		vtpute('^', wp);
 		vtpute(CCHR(c), wp);
 	} else if (isprint(c)) {
 		if (vtcol >= 0)
-			vp->v_text[vtcol] = c;
+			vp->v_text[vtcol+gap] = c;
 		++vtcol;
 	} else {
 		char bf[5], *cp;
@@ -432,8 +454,18 @@ vteeol(void)
 	struct video *vp;
 
 	vp = vscreen[vtrow];
+	
 	while (vtcol < ncol)
 		vp->v_text[vtcol++] = ' ';
+}
+
+void
+vtlinenum(int lnum, struct mgwin *wp)
+{
+	char *lnums = malloc(gap * sizeof(char));
+	snprintf(lnums, gap, "% *d", gap, lnum);
+	vtcol = -gap;
+	vtputs(lnums, wp);
 }
 
 /*
@@ -556,12 +588,12 @@ update(int modelinecolor)
 		++currow;
 		lp = lforw(lp);
 	}
-	curcol = 0;
+	curcol = gap;
 	i = 0;
 	while (i < curwp->w_doto) {
 		c = lgetc(lp, i++);
 		if (c == '\t') {
-			curcol = ntabstop(curcol, curwp->w_bufp->b_tabw);
+			curcol = ntabstop(curcol, curwp->w_bufp->b_tabw) + gap;
 		} else if (ISCTRL(c) != FALSE)
 			curcol += 2;
 		else if (isprint(c))
@@ -698,7 +730,7 @@ ucopy(struct video *vvp, struct video *pvp)
 	pvp->v_hash = vvp->v_hash;
 	pvp->v_cost = vvp->v_cost;
 	pvp->v_color = vvp->v_color;
-	bcopy(vvp->v_text, pvp->v_text, ncol);
+	memmove(pvp->v_text, vvp->v_text, ncol);
 }
 
 /*
@@ -729,8 +761,10 @@ updext(int currow, int curcol)
 	lp = curwp->w_dotp;			/* line to output */
 	for (j = 0; j < llength(lp); ++j)	/* until the end-of-line */
 		vtpute(lgetc(lp, j), curwp);
+
+	vtcol += gap;
 	vteeol();				/* truncate the virtual line */
-	vscreen[currow]->v_text[0] = '$';	/* and put a '$' in column 1 */
+	vscreen[currow]->v_text[gap] = '$';	/* and put a '$' in column 1 */
 }
 
 /*
@@ -834,10 +868,13 @@ uline(int row, struct video *vvp, struct video *pvp)
 void
 modeline(struct mgwin *wp, int modelinecolor)
 {
-	int	n, md;
+	int	n, md, tgap;
 	struct buffer *bp;
 	char sl[21];		/* Overkill. Space for 2^64 in base 10. */
 	int len;
+
+	tgap = gap;
+	gap = 0;
 
 	n = wp->w_toprow + wp->w_ntrows;	/* Location.		 */
 	vscreen[n]->v_color = modelinecolor;	/* Mode line color.	 */
@@ -931,10 +968,12 @@ modeline(struct mgwin *wp, int modelinecolor)
 		vtputc(' ', wp);
 		++n;
 	}
+
+	gap = tgap;
 }
 
 /*
- * Output a string to the mode line, report how long it was.
+ * Output a string to the mode line; report how long it was.
  */
 int
 vtputs(const char *s, struct mgwin *wp)

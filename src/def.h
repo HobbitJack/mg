@@ -554,6 +554,7 @@ int		 colnotoggle(int, int);
 int		 timetoggle(int, int);
 int		 timeformat(int, int);
 int		 batttoggle(int, int);
+int		 displnotoggle(int, int);
 
 /* echo.c X */
 int		 helptoggle(int, int);
