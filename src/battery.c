@@ -14,6 +14,9 @@ get_battery_percentage()
 
 	fscanf(f_cnow, "%d", &cnow);
 	fscanf(f_cfull, "%d", &cfull);
+
+	fclose(f_cnow);
+	fclose(f_cfull);
 	
 	return (int) 100 * (((float) cnow) / cfull);
 }
