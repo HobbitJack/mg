@@ -40,7 +40,6 @@
 #define GUNZIP "gunzip"
 #endif
 
-static char *bkuplocation(const char *);
 static int   bkupleavetmp(const char *);
 static int   isgzip(const char *);
 static FILE *ffgzopen(const char *);
@@ -786,7 +785,7 @@ ffgzclose(FILE *ffp)
 /*
  * Location of backup file. This function creates the correct path.
  */
-static char *
+char *
 bkuplocation(const char *fn)
 {
 	struct stat sb;
