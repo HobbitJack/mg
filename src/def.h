@@ -580,6 +580,8 @@ int		 colnotoggle(int, int);
 int		 timetoggle(int, int);
 int		 visualmark(int, int);
 int		 fontlock(int, int);
+int		 timeformat(int, int);
+int		 batttoggle(int, int);
 
 /* echo.c X */
 int		 helptoggle(int, int);
