@@ -37,8 +37,6 @@ textmode(int f, int n)
 	 * local-set-key in a text buffer lands in that map and not
 	 * in the fill map every filling buffer shares.
 	 */
-	if (!buf_hasmode(curbp, "text") && ((f & FFARG) == 0 || n > 0))
-		(void)fillmode(FFARG, 1);
 	return (changemode(f, n, "text"));
 }
 
