@@ -15,6 +15,7 @@
 #include "ttydef.h"
 #include "def.h"
 #include "kbd.h"
+#include "funmap.h"
 
 /*
  * Get keyboard character.  Very simple if you use keymaps and keys files.
@@ -29,10 +30,117 @@ char	*key_cup    = "\e[1;5A";
 char	*key_cdown  = "\e[1;5B";
 char	*key_cright = "\e[1;5C";
 char	*key_cleft  = "\e[1;5D";
+char	*key_aup    = "\e[1;3A";
+char	*key_adown  = "\e[1;3B";
 char	*key_aright = "\e[1;3C";
 char	*key_aleft  = "\e[1;3D";
 char	*key_cpgup  = "\e[5;5~";
 char	*key_cpgdn  = "\e[6;5~";
+char	*key_shiftup    = "\e[1;2A";
+char	*key_shiftdown  = "\e[1;2B";
+char	*key_shiftright = "\e[1;2C";
+char	*key_shiftleft  = "\e[1;2D";
+char	*key_shifthome  = "\e[1;2H";
+char	*key_shiftend   = "\e[1;2F";
+char	*key_shiftpgup  = "\e[5;2~";
+char	*key_shiftpgdn  = "\e[6;2~";
+char	*key_asup       = "\e[1;4A";
+char	*key_asdown     = "\e[1;4B";
+char	*key_asright    = "\e[1;4C";
+char	*key_asleft     = "\e[1;4D";
+char	*key_csup       = "\e[1;6A";
+char	*key_csdown     = "\e[1;6B";
+char	*key_csright    = "\e[1;6C";
+char	*key_csleft     = "\e[1;6D";
+
+/*
+ * Shifted movement, like shift-select-mode in GNU Emacs: activate
+ * the mark at dot, move, and let the next unshifted command drop
+ * the selection.  A mark the user set himself stays active.
+ */
+static int
+shiftmove(int (*move)(int, int), int f, int n)
+{
+	if (!curwp->w_markact) {
+		isetmark();
+		curwp->w_markact = TRUE;
+		thisflag |= CFSHIFT;
+	} else if (lastflag & CFSHIFT)
+		thisflag |= CFSHIFT;
+	return (move(f, n));
+}
+
+static int
+shiftleft(int f, int n)
+{
+	return (shiftmove(backchar, f, n));
+}
+
+static int
+shiftright(int f, int n)
+{
+	return (shiftmove(forwchar, f, n));
+}
+
+static int
+shiftup(int f, int n)
+{
+	return (shiftmove(backline, f, n));
+}
+
+static int
+shiftdown(int f, int n)
+{
+	return (shiftmove(forwline, f, n));
+}
+
+static int
+shifthome(int f, int n)
+{
+	return (shiftmove(gotobol, f, n));
+}
+
+static int
+shiftend(int f, int n)
+{
+	return (shiftmove(gotoeol, f, n));
+}
+
+static int
+shiftpgup(int f, int n)
+{
+	return (shiftmove(backpage, f, n));
+}
+
+static int
+shiftpgdn(int f, int n)
+{
+	return (shiftmove(forwpage, f, n));
+}
+
+static int
+shiftbword(int f, int n)
+{
+	return (shiftmove(backword, f, n));
+}
+
+static int
+shiftfword(int f, int n)
+{
+	return (shiftmove(forwword, f, n));
+}
+
+static int
+shiftbpara(int f, int n)
+{
+	return (shiftmove(gotobop, f, n));
+}
+
+static int
+shiftfpara(int f, int n)
+{
+	return (shiftmove(gotoeop, f, n));
+}
 
 /*
  * Turn on function keys using keypad_xmit, then load a keys file, if
@@ -93,15 +201,57 @@ ttykeymapinit(void)
 	if (key_cleft)
 		dobindkey(fundamental_map, "backward-word", key_cleft);
 
+	if (key_asup)
+		dobindkey(fundamental_map, "resize-window-up", key_asup);
+	if (key_asdown)
+		dobindkey(fundamental_map, "resize-window-down", key_asdown);
+	if (key_asright)
+		dobindkey(fundamental_map, "resize-window-right", key_asright);
+	if (key_asleft)
+		dobindkey(fundamental_map, "resize-window-left", key_asleft);
+	if (key_aup)
+		dobindkey(fundamental_map, "windmove-up", key_aup);
+	if (key_adown)
+		dobindkey(fundamental_map, "windmove-down", key_adown);
 	if (key_aright)
-		dobindkey(fundamental_map, "forward-word", key_aright);
+		dobindkey(fundamental_map, "windmove-right", key_aright);
 	if (key_aleft)
-		dobindkey(fundamental_map, "backward-word", key_aleft);
+		dobindkey(fundamental_map, "windmove-left", key_aleft);
 
 	if (key_cpgup)
 		dobindkey(fundamental_map, "beginning-of-buffer", key_cpgup);
 	if (key_cpgdn)
 		dobindkey(fundamental_map, "end-of-buffer", key_cpgdn);
+
+	/* The goto-line prefix from newer GNU Emacs; C-x g remains */
+	dobindkey(fundamental_map, "goto-line", "\egg");
+	dobindkey(fundamental_map, "goto-line", "\eg\eg");
+
+	/* Shift and an arrow key mark text, like in GNU Emacs */
+	funmap_add(shiftleft, "shift-backward-char", 0);
+	funmap_add(shiftright, "shift-forward-char", 0);
+	funmap_add(shiftup, "shift-previous-line", 0);
+	funmap_add(shiftdown, "shift-next-line", 0);
+	funmap_add(shifthome, "shift-beginning-of-line", 0);
+	funmap_add(shiftend, "shift-end-of-line", 0);
+	funmap_add(shiftpgup, "shift-scroll-down", 0);
+	funmap_add(shiftpgdn, "shift-scroll-up", 0);
+	funmap_add(shiftbword, "shift-backward-word", 0);
+	funmap_add(shiftfword, "shift-forward-word", 0);
+	funmap_add(shiftbpara, "shift-backward-paragraph", 0);
+	funmap_add(shiftfpara, "shift-forward-paragraph", 0);
+	dobindkey(fundamental_map, "shift-backward-char", key_shiftleft);
+	dobindkey(fundamental_map, "shift-forward-char", key_shiftright);
+	dobindkey(fundamental_map, "shift-previous-line", key_shiftup);
+	dobindkey(fundamental_map, "shift-next-line", key_shiftdown);
+	dobindkey(fundamental_map, "shift-beginning-of-line", key_shifthome);
+	dobindkey(fundamental_map, "shift-end-of-line", key_shiftend);
+	dobindkey(fundamental_map, "shift-scroll-down", key_shiftpgup);
+	dobindkey(fundamental_map, "shift-scroll-up", key_shiftpgdn);
+	dobindkey(fundamental_map, "shift-backward-word", key_csleft);
+	dobindkey(fundamental_map, "shift-forward-word", key_csright);
+	dobindkey(fundamental_map, "shift-backward-paragraph", key_csup);
+	dobindkey(fundamental_map, "shift-forward-paragraph", key_csdown);
 
 	/* Check for $TERM specific .mg startup file */
 	if ((cp = getenv("TERM")) != NULL &&

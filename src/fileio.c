@@ -12,8 +12,10 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <dirent.h>
+#include <err.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <libgen.h>
 #include <limits.h>
 #include <pwd.h>
 #include <signal.h>
@@ -35,14 +37,86 @@
 #endif
 
 #ifndef GUNZIP
-#define GUNZIP "gunzip -c"
+#define GUNZIP "gunzip"
 #endif
 
 static int   bkupleavetmp(const char *);
 static int   isgzip(const char *);
+static FILE *ffgzopen(const char *);
 
 static char *bkupdir;
 static int   leavetmp = 0;	/* 1 = leave any '~' files in tmp dir */
+static pid_t gzpid = -1;	/* gunzip child from ffgzopen() */
+
+/*
+ * Secure mode (-S) refuses any command that would start another program.
+ */
+int
+secure_denied(void)
+{
+	return (dobeep_msg("Command disabled in secure mode"));
+}
+
+static char **allowed;		/* -s: files from the command line */
+static int    nallowed;
+
+/*
+ * Canonical name of fn, also when fn does not exist yet.
+ */
+static void
+canonname(const char *fn, char *buf, size_t len)
+{
+	char	 tmp[PATH_MAX], base[PATH_MAX];
+
+	if (realpath(fn, buf) != NULL)
+		return;
+
+	(void)xbasename(base, fn, sizeof(base));
+	(void)strlcpy(tmp, fn, sizeof(tmp));
+	if (realpath(dirname(tmp), buf) == NULL) {
+		(void)strlcpy(buf, fn, len);
+		return;
+	}
+	if (buf[1] != '\0')
+		(void)strlcat(buf, "/", len);
+	(void)strlcat(buf, base, len);
+}
+
+/*
+ * Register a file that may be opened in single-file mode (-s).
+ */
+void
+secure_allow(const char *fn)
+{
+	char	 buf[PATH_MAX];
+	char	**nap;
+
+	canonname(fn, buf, sizeof(buf));
+	nap = reallocarray(allowed, nallowed + 1, sizeof(*allowed));
+	if (nap == NULL || (nap[nallowed] = strdup(buf)) == NULL)
+		err(1, "secure_allow");
+	allowed = nap;
+	nallowed++;
+}
+
+/*
+ * In single-file mode, only files from the command line may be opened.
+ */
+int
+secure_allowed(const char *fn)
+{
+	char	 buf[PATH_MAX];
+	int	 i;
+
+	if (!singlefile)
+		return (TRUE);
+	canonname(fn, buf, sizeof(buf));
+	for (i = 0; i < nallowed; i++)
+		if (strcmp(allowed[i], buf) == 0)
+			return (TRUE);
+	dobeep_msgs("File not permitted in secure mode:", fn);
+	return (FALSE);
+}
 
 /*
  * Open a file for reading.
@@ -50,11 +124,10 @@ static int   leavetmp = 0;	/* 1 = leave any '~' files in tmp dir */
 int
 ffropen(FILE **ffp, const char *fn, struct buffer *bp)
 {
-	if (isgzip(fn)) {
-		char cmd[strlen(fn) + sizeof(GUNZIP) + 2];
-
-                snprintf(cmd, sizeof(cmd), "%s %s", GUNZIP, fn);
-                if ((*ffp = popen(cmd, "r")) == NULL)
+	if (!secure_allowed(fn))
+		return (FIOERR);
+	if (!secure && isgzip(fn)) {
+		if ((*ffp = ffgzopen(fn)) == NULL)
 			goto filerr;
 
 		ffstat(*ffp, bp);
@@ -127,6 +200,8 @@ ffwopen(FILE ** ffp, const char *fn, struct buffer *bp)
 	int	fd;
 	mode_t	fmode = DEFFILEMODE;
 
+	if (!secure_allowed(fn))
+		return (FIOERR);
 	if (bp && bp->b_fi.fi_mode)
 		fmode = bp->b_fi.fi_mode & 07777;
 
@@ -390,7 +465,7 @@ startupfile(char *suffix, char *conffile, char *path, size_t len)
 		return (ffp);
 	if (ffp) {
 		if (ret == FIOGZIP)
-			(void)pclose(ffp);
+			(void)ffgzclose(ffp);
 		else
 			(void)ffclose(ffp, NULL);
 		ffp = NULL;
@@ -413,7 +488,7 @@ nohome:
 		return (ffp);
 	if (ffp) {
 		if (ret == FIOGZIP)
-			(void)pclose(ffp);
+			(void)ffgzclose(ffp);
 		else
 			(void)ffclose(ffp, NULL);
 	}
@@ -483,9 +558,10 @@ make_file_list(char *buf)
 	DIR		*dirp;
 	struct dirent	*dent;
 	struct list	*last, *current;
-	char		 fl_name[NFILEN + 2];
 	char		 prefixx[NFILEN + 1];
 
+	if (singlefile)
+		return (NULL);
 	/*
 	 * We need three different strings:
 
@@ -586,14 +662,13 @@ make_file_list(char *buf)
 			closedir(dirp);
 			return (NULL);
 		}
-		ret = snprintf(fl_name, sizeof(fl_name),
+		ret = asprintf(&current->l_name,
 		    "%s%s%s", prefixx, dent->d_name, isdir ? "/" : "");
-		if (ret < 0 || ret >= (int)sizeof(fl_name)) {
+		if (ret == -1) {
 			free(current);
 			continue;
 		}
 		current->l_next = last;
-		current->l_name = strdup(fl_name);
 		last = current;
 	}
 	closedir(dirp);
@@ -656,6 +731,55 @@ isgzip(const char *fn)
         }
 
         return 0;
+}
+
+/*
+ * Run gunzip on fn without going through the shell, return its stdout
+ * as a read stream.  Close with ffgzclose().
+ */
+static FILE *
+ffgzopen(const char *fn)
+{
+	FILE *ffp;
+	int p[2];
+
+	if (pipe(p) == -1)
+		return (NULL);
+
+	switch ((gzpid = fork())) {
+	case -1:
+		close(p[0]);
+		close(p[1]);
+		return (NULL);
+	case 0:
+		close(p[0]);
+		if (dup2(p[1], STDOUT_FILENO) == -1)
+			_exit(1);
+		close(p[1]);
+		execlp(GUNZIP, GUNZIP, "-c", "--", fn, (char *)NULL);
+		_exit(1);
+	}
+
+	close(p[1]);
+	if ((ffp = fdopen(p[0], "r")) == NULL) {
+		close(p[0]);
+		ffgzclose(NULL);
+	}
+
+	return (ffp);
+}
+
+/*
+ * Close stream from ffgzopen() and reap gunzip.
+ */
+void
+ffgzclose(FILE *ffp)
+{
+	if (ffp)
+		fclose(ffp);
+	if (gzpid > 0)
+		waitpid(gzpid, NULL, 0);
+	gzpid = -1;
 }
 
 /*

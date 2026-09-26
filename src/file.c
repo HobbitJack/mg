@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <errno.h>
 #include <libgen.h>
+#include <limits.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -221,6 +222,7 @@ readin(char *fname)
 			wp->w_doto = 0;
 			wp->w_markp = NULL;
 			wp->w_marko = 0;
+			wp->w_markact = FALSE;
 		}
 	}
 
@@ -231,10 +233,15 @@ readin(char *fname)
 	if ((ael = find_autoexec(fname)) != NULL) {
 		int i;
 
+		/*
+		 * FFARG forces the mode on; a plain call toggles it
+		 * off again when revert-buffer comes through here.
+		 */
 		for (i = 0; ael[i] != NULL; i++)
-			(*ael[i])(0, 1);
+			(*ael[i])(FFARG, 1);
 		free(ael);
 	}
+	shebang_execute();
 #endif
 
 	/* no change */
@@ -272,6 +279,12 @@ readin(char *fname)
 	if (startrow) {
 		gotoline(FFARG, startrow);
 		startrow = 0;
+	}
+	if (startcol > 1) {
+		curgoal = startcol - 1;
+		curwp->w_doto = getgoal(curwp->w_dotp);
+		curwp->w_rflag |= WFMOVE;
+		startcol = 0;
 	}
 
 	undo_add_modified();
@@ -416,9 +429,15 @@ retry:
 				char	*cp;
 				int	newsize;
 
+				if (linesize > INT_MAX / 2) {
+					dobeep();
+					ewprintf("Line too long, %d bytes",
+					    linesize);
+					s = FIOERR;
+					goto endoffile;
+				}
 				newsize = linesize * 2;
-				if (newsize < 0 ||
-				    (cp = malloc(newsize)) == NULL) {
+				if ((cp = malloc(newsize)) == NULL) {
 					dobeep();
 					ewprintf("Could not allocate %d bytes",
 					    newsize);
@@ -446,7 +465,7 @@ retry:
 endoffile:
 	/* ignore errors */
 	if (pipe)
-		(void)pclose(ffp);
+		(void)ffgzclose(ffp);
 	else
 		(void)ffclose(ffp, NULL);
 
@@ -587,6 +606,11 @@ static int	makebackup = TRUE;
 int
 filesave(int f, int n)
 {
+	if ((curbp->b_flag & BFCHG) == 0) {
+		ewprintf("(No changes need to be saved)");
+		return (TRUE);
+	}
+
 	if (curbp->b_fname[0] == '\0')
 		return (filewrite(f, n));
 	else
@@ -594,8 +618,7 @@ filesave(int f, int n)
 }
 
 /*
- * Save the contents of the buffer argument into its associated file.  Do
- * nothing if there have been no changes (is this a bug, or a feature?).
+ * Save the contents of the buffer argument into its associated file.
  * Error if there is no remembered file name. If this is the first write
  * since the read or visit, then a backup copy of the file is made.
  * Allow user to select whether or not to make backup files by looking at
@@ -606,12 +629,6 @@ buffsave(struct buffer *bp)
 {
 	int	 s;
         FILE    *ffp;
-
-	/* return, no changes */
-	if ((bp->b_flag & BFCHG) == 0) {
-		ewprintf("(No changes need to be saved)");
-		return (TRUE);
-	}
 
 	/* must have a name */
 	if (bp->b_fname[0] == '\0') {

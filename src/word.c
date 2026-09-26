@@ -107,7 +107,7 @@ transposeword(int f, int n)
 	(void)backword(FFRAND, 1);
 	ret = grabword(&word1);
 	if (ret == ABORT) {
-		ewprintf("No word to the left to tranpose.");
+		ewprintf("No word to the left to transpose.");
 		return (FALSE);
 	}
 	if (ret < 0) {
@@ -175,6 +175,7 @@ transposeword(int f, int n)
 		curwp->w_dotline = tmp2_w_dotline;
 		curwp->w_dotp = tmp2_w_dotp;
 
+		free(word2);
 		word2 = NULL;
 	}
 	curwp->w_doto = tmp2_w_doto;
@@ -202,17 +203,22 @@ transposeword(int f, int n)
 int
 grabword(char **word)
 {
-	int c;
+	size_t len = 0, cap = 0;
+	char *t;
 
 	while (inword() == TRUE) {
-		c = lgetc(curwp->w_dotp, curwp->w_doto);
-		if (*word == NULL) {
-			if (asprintf(word, "%c", c) == -1)
+		if (cap == 0 || len == cap - 1) {
+			t = recallocarray(*word, cap, cap + 8, 1);
+			if (t == NULL) {
+				free(*word);
+				*word = NULL;
 				return (errno);
-		} else {
-			if (asprintf(word, "%s%c", *word, c) == -1)
-				return (errno);
+			}
+			cap += 8;
+			*word = t;
 		}
+
+		(*word)[len++] = lgetc(curwp->w_dotp, curwp->w_doto);
 		(void)forwdel(FFRAND, 1);
 	}
 	if (*word == NULL)

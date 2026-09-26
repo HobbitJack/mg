@@ -76,15 +76,21 @@ extern TERMINAL *cur_term;
 #define cursor_up            CUR t_str[19]
 #define cursor_address       CUR t_str[10]
 
-#define enter_ca_mode        ""
-#define exit_ca_mode         ""
+#define enter_ca_mode        "\033[?1049h"
+#define exit_ca_mode         "\033[?1049l"
 
 #define enter_standout_mode  CUR t_str[35]
 #define exit_standout_mode   CUR t_str[43]
 
+#define exit_attribute_mode  "\033[0m"
+#define set_a_foreground     "\033[3%dm"
+#define enter_bold_mode      "\033[1m"
+#define max_colors           8
+
 int   setupterm(const char *term, int filedes, int *errret);
 
 char *tgoto(const char *cap, int col, int row);
+char *tparm(const char *cap, ...);
 int   tputs(const char *str, int affcnt, int (*putc)(int));
 
 #endif /* ANSI_H */

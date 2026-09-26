@@ -26,21 +26,36 @@
 
 /*
  * A video structure always holds
- * an array of characters whose length is equal to
+ * an array of display cells whose length is equal to
  * the longest line possible. v_text is allocated
- * dynamically to fit the screen width.
+ * dynamically to fit the screen width.  A cell holds one
+ * column: a byte in single-byte locales, a codepoint in
+ * UTF-8 locales, or VCONT after a double-width codepoint.
  */
 struct video {
 	short	v_hash;		/* Hash code, for compares.	 */
 	short	v_flag;		/* Flag word.			 */
 	short	v_color;	/* Color of the line.		 */
 	int	v_cost;		/* Cost of display.		 */
-	char	*v_text;	/* The actual characters.	 */
+	int	*v_text;	/* The actual display cells.	 */
 };
 
 #define VFCHG	0x0001			/* Changed.			 */
 #define VFHBAD	0x0002			/* Hash and cost are bad.	 */
 #define VFEXT	0x0004			/* extended line (beyond ncol)	 */
+
+/*
+ * Cell attributes, riding above the at most 21 bit codepoints in
+ * the same int: a syntax class in the VSYN bits, and VREV on cells
+ * inside the region between mark and dot, drawn in reverse video.
+ */
+#define VSYNSHIFT	24
+#define VSYNMASK	0x0f000000
+#define VREV		0x40000000
+#define VATTRMASK	(VSYNMASK | VREV)
+/* Zero codepoint payload is reserved: vtputc() escapes control bytes.
+ * Strip VATTRMASK before testing for a continuation cell. */
+#define VCONT		0
 
 /*
  * SCORE structures hold the optimal
@@ -56,6 +71,8 @@ struct score {
 void	vtmove(int, int);
 void	vtputc(int, struct mgwin *);
 void	vtpute(int, struct mgwin *);
+void	vtputl(struct line *, struct mgwin *, int, int);
+void	vtputel(struct line *, struct mgwin *, int, int);
 int	vtputs(const char *, struct mgwin *);
 void	vteeol(void);
 void	updext(int, int);
@@ -100,6 +117,256 @@ static int	 battsh  = FALSE;
 /* For display-time-mode */
 static char  formats[20] = "%H:%M";
 
+static int	 visual_mark = TRUE;	/* draw region after set-mark	*/
+static int	 font_lock = TRUE;	/* syntax highlighting		*/
+
+static int	 vtattr = 0;		/* attributes of current byte	*/
+
+/*
+ * Column bounds of the window being rendered.  Windows can sit side
+ * by side, so the virtual display writers must stay inside
+ * [vtleft, vtright) and leave the neighbor's cells alone.
+ */
+static int	 vtleft = 0;
+static int	 vtright = 0;
+
+/*
+ * Whether the window being rendered wraps a line too long for it onto
+ * the rows below, and the last row it may spill into.
+ */
+static int	 vtwrap = 0;
+static int	 vtbot = 0;
+
+/*
+ * The gutter of line numbers the window being rendered has left of
+ * vtleft, and the number of the line on its top row.
+ */
+static int	 vtgut = 0;
+static int	 vttopln = 1;
+
+/*
+ * The window owning the extended line, if any.  The VFEXT row flag
+ * is shared between side by side windows, so only the strip that
+ * drew the extension may de-extend it.
+ */
+static struct mgwin *extwp = NULL;
+
+/*
+ * True when the buffer shown in wp is in the mode called name.  The
+ * mode is looked up once, into m; b_modes is a handful of pointers
+ * to walk.
+ */
+static int
+inmode(struct mgwin *wp, struct maps_s **m, const char *name)
+{
+	struct buffer	*bp = wp->w_bufp;
+	int		 i;
+
+	if (*m == NULL && (*m = name_mode(name)) == NULL)
+		return (0);
+	for (i = 0; i <= bp->b_nmodes; i++)
+		if (bp->b_modes[i] == *m)
+			return (1);
+	return (0);
+}
+
+static int
+wrapped(struct mgwin *wp)
+{
+	static struct maps_s	*wrapmode = NULL;
+
+	return (inmode(wp, &wrapmode, "wrap"));
+}
+
+/*
+ * Columns the line numbers take at the left of wp, two digits and a
+ * space at least: none when the buffer is not in linum mode, or the
+ * window is too narrow to keep any text beside them.
+ */
+static int
+gutterwidth(struct mgwin *wp)
+{
+	static struct maps_s	*linummode = NULL;
+	int			 n, w;
+
+	if (!inmode(wp, &linummode, "linum"))
+		return (0);
+	for (w = 3, n = wp->w_bufp->b_lines; n >= 100; n /= 10)
+		w++;
+	return (w + 1 < wp->w_ntcols ? w : 0);
+}
+
+/*
+ * The columns of wp that hold text: the gutter takes the rest.
+ */
+static int
+textcols(struct mgwin *wp)
+{
+	return (wp->w_ntcols - gutterwidth(wp));
+}
+
+/*
+ * Only valid once the window is framed, since the line number of its
+ * top row is found by walking dot back to it.
+ */
+static void
+vtbounds(struct mgwin *wp)
+{
+	struct line	*lp;
+
+	vtgut = gutterwidth(wp);
+	vtleft = wp->w_leftcol + vtgut;
+	vtright = wp->w_leftcol + wp->w_ntcols;
+	vtwrap = wrapped(wp);
+	vtbot = wp->w_toprow + wp->w_ntrows - 1;
+	vttopln = wp->w_dotline;
+	for (lp = wp->w_dotp; lp != wp->w_linep; lp = lback(lp))
+		vttopln--;
+}
+
+/*
+ * Put line number ln in the gutter of row, or clear it for 0: a row
+ * a line wrapped onto, or one past the end of the buffer.
+ */
+static void
+vtgutter(int row, int ln)
+{
+	int	*cells = vscreen[row]->v_text;
+	int	 i;
+
+	for (i = vtleft - vtgut; i < vtleft; i++)
+		cells[i] = ' ';
+	for (i = vtleft - 2; i >= vtleft - vtgut && ln > 0; i--, ln /= 10)
+		cells[i] = '0' + ln % 10;
+}
+
+/*
+ * The columns a wrapping window has for text: the last one carries the
+ * marker that says the line goes on below.
+ */
+static int
+vtusable(int ntcols)
+{
+	return (ntcols > 1 ? ntcols - 1 : 1);
+}
+
+/*
+ * The column text stops at.  A wrapping window keeps the last one for
+ * the continuation marker.
+ */
+static int
+vtedge(void)
+{
+	if (vtwrap && vtright - vtleft > 1)
+		return (vtright - 1);
+	return (vtright);
+}
+
+/*
+ * Where offset o of lp falls once wrapped in wp, its column through
+ * col.  Returns the row, counting from one, so the length of the line
+ * gives the rows it takes.  A character that does not fit moves to the
+ * next row whole, the way the writers place it; dividing the width
+ * would put double-width text a row out.
+ */
+static int
+wraprows(struct line *lp, struct mgwin *wp, int o, int *col)
+{
+	int	 c, i, len, rows, usable, w;
+
+	usable = vtusable(textcols(wp));
+	rows = 1;
+	c = 0;
+	for (i = 0; i < o && i < llength(lp); i += len) {
+		w = charcols(lp, i, c, wp->w_bufp->b_tabw, &len);
+		if (c + w > usable) {
+			rows++;
+			c = 0;
+		}
+		c += w;
+	}
+	/*
+	 * Dot sitting where the row ran out belongs at the start of the
+	 * next one, where the character it precedes is drawn.  At the
+	 * end of a line there is no such character, and the column kept
+	 * for the marker is free, since the last row carries none.
+	 */
+	if (col != NULL) {
+		if (c >= usable && o < llength(lp)) {
+			rows++;
+			c = 0;
+		}
+		*col = c;
+	}
+	return (rows);
+}
+
+/*
+ * The rows a line takes in wp: one, unless the window wraps and the
+ * line is wider than it is.
+ */
+static int
+linerows(struct line *lp, struct mgwin *wp)
+{
+	if (!wrapped(wp))
+		return (1);
+	return (wraprows(lp, wp, llength(lp), NULL));
+}
+
+/*
+ * The column between side by side windows, drawn by the one on its
+ * left whenever it finishes a row.
+ */
+static void
+vtdivider(void)
+{
+	if (vtright < ncol)
+		vscreen[vtrow]->v_text[vtright] = '|';
+}
+
+/*
+ * At the right edge with more to write: mark the row as continued and
+ * step to the next when the window wraps and there is one left.
+ */
+static int
+vtnextrow(void)
+{
+	if (!vtwrap || vtrow >= vtbot || vtright - vtleft < 2)
+		return (0);
+	vscreen[vtrow]->v_text[vtright - 1] = utf8_mode ? 0x21B5 : '\\';
+	vtdivider();
+	vtrow++;
+	vtcol = vtleft;
+	vtgutter(vtrow, 0);
+	return (1);
+}
+
+/*
+ * Syntax parser state for the window being rendered.  Lines fed to
+ * vtputl()/vtputel() in buffer order thread the multiline comment
+ * state from line to line; a line rendered out of order gets its
+ * state by a scan from the top of the buffer.
+ */
+static struct {
+	const struct syntax	*sy;
+	struct buffer	*bp;
+	struct line	*nextlp;
+	int		 incom;
+	char		*attr;
+	int		 attrsz;
+} vsyn;
+
+/*
+ * Region shown in the window being rendered, in line number and
+ * byte offset pairs, start before end.  Set up by hlsetup() and
+ * queried per line with hlrange().
+ */
+static struct {
+	int	 active;
+	int	 sline, soff;
+	int	 eline, eoff;
+} hl;
+
 /* Is macro recording enabled? */
 extern int macrodef;
 
@@ -131,6 +398,121 @@ colnotoggle(int f, int n)
 	sgarbf = TRUE;
 
 	return (TRUE);
+}
+
+int
+visualmark(int f, int n)
+{
+	if (f & FFARG)
+		visual_mark = n > 0;
+	else
+		visual_mark = !visual_mark;
+	ewprintf("Visual mark mode %sabled", visual_mark ? "en" : "dis");
+
+	sgarbf = TRUE;
+
+	return (TRUE);
+}
+
+int
+fontlock(int f, int n)
+{
+	if (f & FFARG)
+		font_lock = n > 0;
+	else
+		font_lock = !font_lock;
+	ewprintf("Font lock mode %sabled", font_lock ? "en" : "dis");
+
+	sgarbf = TRUE;
+
+	return (TRUE);
+}
+
+/*
+ * Prepare syntax highlighting for the window being rendered.
+ */
+static void
+synsetup(struct mgwin *wp)
+{
+	vsyn.sy = font_lock ? syntax_lookup(wp->w_bufp) : NULL;
+	vsyn.bp = wp->w_bufp;
+	vsyn.nextlp = NULL;
+}
+
+/*
+ * Classify the bytes of lp for the display, threading the multiline
+ * comment state when lines arrive in buffer order.  Returns the
+ * attribute array, or NULL when no syntax rules apply.
+ */
+static char *
+synline(struct line *lp)
+{
+	char	*attr;
+
+	if (vsyn.sy == NULL)
+		return (NULL);
+	if (llength(lp) > vsyn.attrsz) {
+		if ((attr = realloc(vsyn.attr, llength(lp))) == NULL) {
+			vsyn.sy = NULL;
+			return (NULL);
+		}
+		vsyn.attr = attr;
+		vsyn.attrsz = llength(lp);
+	}
+	if (lp != vsyn.nextlp)
+		vsyn.incom = syn_state(vsyn.sy, vsyn.bp, lp);
+	vsyn.incom = syn_parse(vsyn.sy, lp, vsyn.incom, vsyn.attr);
+	vsyn.nextlp = lforw(lp);
+	return (vsyn.attr);
+}
+
+/*
+ * True when the region between mark and dot should be shown in
+ * the given window.
+ */
+static int
+hlactive(struct mgwin *wp)
+{
+	return (visual_mark && wp->w_markact && wp->w_markp != NULL);
+}
+
+/*
+ * Prepare region drawing for the window being rendered: order the
+ * mark and dot endpoints by line number and byte offset.
+ */
+static void
+hlsetup(struct mgwin *wp)
+{
+	hl.active = hlactive(wp);
+	if (!hl.active)
+		return;
+	if (wp->w_markline < wp->w_dotline ||
+	    (wp->w_markline == wp->w_dotline &&
+	     wp->w_marko <= wp->w_doto)) {
+		hl.sline = wp->w_markline;
+		hl.soff = wp->w_marko;
+		hl.eline = wp->w_dotline;
+		hl.eoff = wp->w_doto;
+	} else {
+		hl.sline = wp->w_dotline;
+		hl.soff = wp->w_doto;
+		hl.eline = wp->w_markline;
+		hl.eoff = wp->w_marko;
+	}
+}
+
+/*
+ * Byte range [s, e) of the region on line number ln, of len bytes.
+ * Empty unless the line is inside the region set up by hlsetup().
+ */
+static void
+hlrange(int ln, int len, int *s, int *e)
+{
+	*s = *e = 0;
+	if (!hl.active || ln < hl.sline || ln > hl.eline)
+		return;
+	*s = (ln == hl.sline) ? hl.soff : 0;
+	*e = (ln == hl.eline) ? hl.eoff : len;
 }
 
 int
@@ -194,14 +576,6 @@ vtresize(int force, int newrow, int newcol)
 	rowchanged = (newrow != nrow);
 	colchanged = (newcol != ncol);
 
-#define TRYREALLOC(a, n) do {					\
-		void *tmp;					\
-		if ((tmp = realloc((a), (n))) == NULL) {	\
-			panic("out of memory in display code");	\
-		}						\
-		(a) = tmp;					\
-	} while (0)
-
 #define TRYREALLOCARRAY(a, n, m) do {				\
 		void *tmp;					\
 		if ((tmp = reallocarray((a), (n), (m))) == NULL) {\
@@ -262,8 +636,10 @@ vtresize(int force, int newrow, int newcol)
 	}
 	if (rowchanged || colchanged || first_run) {
 		for (i = 0; i < 2 * (newrow - 1); i++)
-			TRYREALLOC(video[i].v_text, newcol);
-		TRYREALLOC(blanks.v_text, newcol);
+			TRYREALLOCARRAY(video[i].v_text, newcol,
+			    sizeof(*video[i].v_text));
+		TRYREALLOCARRAY(blanks.v_text, newcol,
+		    sizeof(*blanks.v_text));
 	}
 
 	nrow = newrow;
@@ -278,7 +654,6 @@ vtresize(int force, int newrow, int newcol)
 	return (TRUE);
 }
 
-#undef TRYREALLOC
 #undef TRYREALLOCARRAY
 
 /*
@@ -343,6 +718,23 @@ vtmove(int row, int col)
 	vtcol = col;
 }
 
+/* Replacing either half of a wide character must clear the other half. */
+static void
+vtmark(int col)
+{
+	int *cells = vscreen[vtrow]->v_text;
+	int cp = cells[col] & ~VATTRMASK;
+
+	if (utf8_mode) {
+		if (cp == VCONT && col > vtleft &&
+		    utf8_width(cells[col - 1] & ~VATTRMASK) == 2)
+			cells[col - 1] = ' ' | (cells[col - 1] & VATTRMASK);
+		else if (utf8_width(cp) == 2 && col + 1 < vtright)
+			cells[col + 1] = ' ' | (cells[col + 1] & VATTRMASK);
+	}
+	cells[col] = '$';
+}
+
 /*
  * Write a character to the virtual display,
  * dealing with long lines and the display of unprintable
@@ -363,25 +755,87 @@ vtputc(int c, struct mgwin *wp)
 
 	c &= 0xff;
 
+	if (vtcol >= vtright)
+		(void)vtnextrow();
+	if (vtcol >= vtedge())
+		(void)vtnextrow();
 	vp = vscreen[vtrow];
-	if (vtcol >= ncol)
-		vp->v_text[ncol - 1] = '$';
+	if (vtcol >= vtedge())
+		vtmark(vtright - 1);
 	else if (c == '\t') {
-		target = ntabstop(vtcol, wp->w_bufp->b_tabw);
+		target = vtleft + ntabstop(vtcol - vtleft,
+		    wp->w_bufp->b_tabw);
 		do {
 			vtputc(' ', wp);
-		} while (vtcol < ncol && vtcol < target);
+		} while (vtcol < vtedge() && vtcol < target);
 	} else if (ISCTRL(c)) {
 		vtputc('^', wp);
 		vtputc(CCHR(c), wp);
 	} else if (isprint(c))
-		vp->v_text[vtcol++] = c;
+		vp->v_text[vtcol++] = c | vtattr;
 	else {
 		char bf[5];
 
 		snprintf(bf, sizeof(bf), "\\%o", c);
 		vtputs(bf, wp);
 	}
+}
+
+/*
+ * Put the codepoint of a decoded UTF-8 sequence on the virtual
+ * display.  Positions left of the display,
+ * possible in extended lines, are tracked but not stored.
+ */
+static void
+vtputcp(int cp)
+{
+	struct video	*vp;
+	int		 i, width;
+
+	width = utf8_width(cp);
+	if (vtcol + width > vtedge())
+		(void)vtnextrow();
+	vp = vscreen[vtrow];
+	if (vtcol + width > vtedge()) {
+		if (vtcol < vtright)
+			vp->v_text[vtright - 1] = ' ';
+		vtmark(vtright - 1);
+		vtcol = vtright;
+	} else {
+		if (vtcol >= vtleft) {
+			vp->v_text[vtcol] = cp | vtattr;
+			for (i = 1; i < width; i++)
+				vp->v_text[vtcol + i] = VCONT | vtattr;
+		} else if (vtcol + width > vtleft)
+			vp->v_text[vtleft] = ' ' | vtattr;
+		vtcol += width;
+	}
+}
+
+/*
+ * Write an entire line to the virtual display.  UTF-8 sequences
+ * occupy one or two cells each; all other bytes go through
+ * vtputc() as before.  Cells in the byte range [s, e) are marked
+ * with the region attribute; pass s == e for no region.
+ */
+void
+vtputl(struct line *lp, struct mgwin *wp, int s, int e)
+{
+	char	*attr;
+	int	 c, cp, i, len;
+
+	attr = synline(lp);
+	for (i = 0; i < llength(lp); ++i) {
+		vtattr = ((i >= s && i < e) ? VREV : 0) |
+		    (attr != NULL ? attr[i] << VSYNSHIFT : 0);
+		c = lgetc(lp, i);
+		if (c >= 0x80 && (cp = utf8_get(lp, i, &len)) != -1) {
+			vtputcp(cp);
+			i += len - 1;
+		} else
+			vtputc(c, wp);
+	}
+	vtattr = 0;
 }
 
 /*
@@ -397,20 +851,25 @@ vtpute(int c, struct mgwin *wp)
 
 	c &= 0xff;
 
+	if (vtcol >= vtright)
+		(void)vtnextrow();
+	if (vtcol >= vtedge())
+		(void)vtnextrow();
 	vp = vscreen[vtrow];
-	if (vtcol >= ncol)
-		vp->v_text[ncol - 1] = '$';
+	if (vtcol >= vtedge())
+		vtmark(vtright - 1);
 	else if (c == '\t') {
-		target = ntabstop(vtcol + lbound, wp->w_bufp->b_tabw);
+		target = vtleft - lbound +
+		    ntabstop(vtcol - vtleft + lbound, wp->w_bufp->b_tabw);
 		do {
 			vtpute(' ', wp);
-		} while (((vtcol + lbound) < target) && vtcol < ncol);
+		} while (vtcol < target && vtcol < vtright);
 	} else if (ISCTRL(c) != FALSE) {
 		vtpute('^', wp);
 		vtpute(CCHR(c), wp);
 	} else if (isprint(c)) {
-		if (vtcol >= 0)
-			vp->v_text[vtcol] = c;
+		if (vtcol >= vtleft)
+			vp->v_text[vtcol] = c | vtattr;
 		++vtcol;
 	} else {
 		char bf[5], *cp;
@@ -419,6 +878,31 @@ vtpute(int c, struct mgwin *wp)
 		for (cp = bf; *cp != '\0'; cp++)
 			vtpute(*cp, wp);
 	}
+}
+
+/*
+ * Write an entire line to the virtual display as an extended
+ * line.  The UTF-8 counterpart of vtpute().  Cells in the byte
+ * range [s, e) are marked with the region attribute.
+ */
+void
+vtputel(struct line *lp, struct mgwin *wp, int s, int e)
+{
+	char	*attr;
+	int	 c, cp, i, len;
+
+	attr = synline(lp);
+	for (i = 0; i < llength(lp); ++i) {
+		vtattr = ((i >= s && i < e) ? VREV : 0) |
+		    (attr != NULL ? attr[i] << VSYNSHIFT : 0);
+		c = lgetc(lp, i);
+		if (c >= 0x80 && (cp = utf8_get(lp, i, &len)) != -1) {
+			vtputcp(cp);
+			i += len - 1;
+		} else
+			vtpute(c, wp);
+	}
+	vtattr = 0;
 }
 
 /*
@@ -432,8 +916,9 @@ vteeol(void)
 	struct video *vp;
 
 	vp = vscreen[vtrow];
-	while (vtcol < ncol)
-		vp->v_text[vtcol++] = ' ';
+	while (vtcol < vtright)
+		vp->v_text[vtcol++] = ' ' | vtattr;
+	vtdivider();
 }
 
 /*
@@ -452,9 +937,9 @@ update(int modelinecolor)
 	struct mgwin	*wp;
 	struct video	*vp1;
 	struct video	*vp2;
-	int	 c, i, j;
+	int	 i, ln, s, e;
 	int	 hflag;
-	int	 currow, curcol;
+	int	 currow, curcol, curleft;
 	int	 offs, size;
 
 	if (charswaiting())
@@ -476,6 +961,19 @@ update(int modelinecolor)
 	hflag = FALSE;			/* Not hard. */
 	for (wp = wheadp; wp != NULL; wp = wp->w_wndp) {
 		/*
+		 * An active region follows dot around, so it must be
+		 * redrawn on plain movement too.  An edit can recolor
+		 * every line below it when the language has multiline
+		 * comments, so those cannot take the one-line path.
+		 */
+		if (wp->w_rflag != 0 &&
+		    (hlactive(wp) ||
+		     ((wp->w_rflag & WFEDIT) && wrapped(wp)) ||
+		     (font_lock && (wp->w_rflag & WFEDIT) &&
+		      syn_multiline(wp->w_bufp))))
+			wp->w_rflag |= WFFULL;
+
+		/*
 		 * Nothing to be done.
 		 */
 		if (wp->w_rflag == 0)
@@ -483,11 +981,13 @@ update(int modelinecolor)
 
 		if ((wp->w_rflag & WFFRAME) == 0) {
 			lp = wp->w_linep;
-			for (i = 0; i < wp->w_ntrows; ++i) {
+			i = 0;
+			while (i < wp->w_ntrows) {
 				if (lp == wp->w_dotp)
 					goto out;
 				if (lp == wp->w_bufp->b_headp)
 					break;
+				i += linerows(lp, wp);
 				lp = lforw(lp);
 			}
 		}
@@ -510,15 +1010,16 @@ update(int modelinecolor)
 		 * Find the line.
 		 */
 		lp = wp->w_dotp;
-		while (i != 0 && lback(lp) != wp->w_bufp->b_headp) {
-			--i;
+		while (i > 0 && lback(lp) != wp->w_bufp->b_headp) {
 			lp = lback(lp);
+			i -= linerows(lp, wp);
 		}
 		wp->w_linep = lp;
 		wp->w_rflag |= WFFULL;	/* Force full.		 */
 	out:
 		lp = wp->w_linep;	/* Try reduced update.	 */
 		i = wp->w_toprow;
+		vtbounds(wp);
 		if ((wp->w_rflag & ~WFMODE) == WFEDIT) {
 			while (lp != wp->w_dotp) {
 				++i;
@@ -526,23 +1027,33 @@ update(int modelinecolor)
 			}
 			vscreen[i]->v_color = CTEXT;
 			vscreen[i]->v_flag |= (VFCHG | VFHBAD);
-			vtmove(i, 0);
-			for (j = 0; j < llength(lp); ++j)
-				vtputc(lgetc(lp, j), wp);
+			vtgutter(i, wp->w_dotline);
+			vtmove(i, vtleft);
+			synsetup(wp);
+			vtputl(lp, wp, 0, 0);
 			vteeol();
 		} else if ((wp->w_rflag & (WFEDIT | WFFULL)) != 0) {
 			hflag = TRUE;
+			hlsetup(wp);
+			synsetup(wp);
+			ln = vttopln;
 			while (i < wp->w_toprow + wp->w_ntrows) {
 				vscreen[i]->v_color = CTEXT;
 				vscreen[i]->v_flag |= (VFCHG | VFHBAD);
-				vtmove(i, 0);
+				vtgutter(i, lp != wp->w_bufp->b_headp ? ln : 0);
+				vtmove(i, vtleft);
 				if (lp != wp->w_bufp->b_headp) {
-					for (j = 0; j < llength(lp); ++j)
-						vtputc(lgetc(lp, j), wp);
+					hlrange(ln, llength(lp), &s, &e);
+					vtputl(lp, wp, s, e);
 					lp = lforw(lp);
+					ln++;
 				}
 				vteeol();
-				++i;
+				/* a wrapped line took the rows under it too */
+				while (++i <= vtrow) {
+					vscreen[i]->v_color = CTEXT;
+					vscreen[i]->v_flag |= (VFCHG | VFHBAD);
+				}
 			}
 		}
 		if ((wp->w_rflag & WFMODE) != 0)
@@ -553,27 +1064,17 @@ update(int modelinecolor)
 	lp = curwp->w_linep;	/* Cursor location. */
 	currow = curwp->w_toprow;
 	while (lp != curwp->w_dotp) {
-		++currow;
+		currow += linerows(lp, curwp);
 		lp = lforw(lp);
 	}
-	curcol = 0;
-	i = 0;
-	while (i < curwp->w_doto) {
-		c = lgetc(lp, i++);
-		if (c == '\t') {
-			curcol = ntabstop(curcol, curwp->w_bufp->b_tabw);
-		} else if (ISCTRL(c) != FALSE)
-			curcol += 2;
-		else if (isprint(c))
-			curcol++;
-		else {
-			char bf[5];
-
-			snprintf(bf, sizeof(bf), "\\%o", c);
-			curcol += strlen(bf);
-		}
-	}
-	if (curcol >= ncol - 1) {	/* extended line. */
+	curcol = getcolpos(curwp);
+	curleft = curwp->w_leftcol + gutterwidth(curwp);
+	if (wrapped(curwp)) {
+		/* dot sits on one of the rows the line wrapped onto */
+		currow += wraprows(curwp->w_dotp, curwp, curwp->w_doto,
+		    &curcol) - 1;
+		lbound = 0;
+	} else if (curcol >= textcols(curwp) - 1) {	/* extended line. */
 		/* flag we are extended and changed */
 		vscreen[currow]->v_flag |= VFEXT | VFCHG;
 		updext(currow, curcol);	/* and output extended line */
@@ -588,21 +1089,26 @@ update(int modelinecolor)
 	while (wp != NULL) {
 		lp = wp->w_linep;
 		i = wp->w_toprow;
+		vtbounds(wp);
+		hlsetup(wp);
+		synsetup(wp);
+		ln = vttopln;
 		while (i < wp->w_toprow + wp->w_ntrows) {
-			if (vscreen[i]->v_flag & VFEXT) {
+			if ((vscreen[i]->v_flag & VFEXT) && wp == extwp) {
 				/* always flag extended lines as changed */
 				vscreen[i]->v_flag |= VFCHG;
 				if ((wp != curwp) || (lp != wp->w_dotp) ||
-				    (curcol < ncol - 1)) {
-					vtmove(i, 0);
-					for (j = 0; j < llength(lp); ++j)
-						vtputc(lgetc(lp, j), wp);
+				    (curcol < textcols(curwp) - 1)) {
+					vtmove(i, vtleft);
+					hlrange(ln, llength(lp), &s, &e);
+					vtputl(lp, wp, s, e);
 					vteeol();
 					/* this line no longer is extended */
 					vscreen[i]->v_flag &= ~VFEXT;
 				}
 			}
 			lp = lforw(lp);
+			ln++;
 			++i;
 		}
 		/* if garbaged then fix up mode lines */
@@ -624,10 +1130,14 @@ update(int modelinecolor)
 			uline(i, vscreen[i], &blanks);
 			ucopy(vscreen[i], pscreen[i]);
 		}
-		ttmove(currow, curcol - lbound);
+		ttmove(currow, curleft + curcol - lbound);
 		ttflush();
 		return;
 	}
+	/* line scrolling moves both sides of side by side windows */
+	for (wp = wheadp; wp != NULL; wp = wp->w_wndp)
+		if (wp->w_ntcols != ncol)
+			hflag = FALSE;
 	if (hflag != FALSE) {			/* Hard update?		*/
 		for (i = 0; i < nrow - 1; ++i) {/* Compute hash data.	*/
 			hash(vscreen[i]);
@@ -645,7 +1155,7 @@ update(int modelinecolor)
 			++offs;
 		}
 		if (offs == nrow - 1) {		/* Might get it all.	*/
-			ttmove(currow, curcol - lbound);
+			ttmove(currow, curleft + curcol - lbound);
 			ttflush();
 			return;
 		}
@@ -666,7 +1176,7 @@ update(int modelinecolor)
 		traceback(offs, size, size, size);
 		for (i = 0; i < size; ++i)
 			ucopy(vscreen[offs + i], pscreen[offs + i]);
-		ttmove(currow, curcol - lbound);
+		ttmove(currow, curleft + curcol - lbound);
 		ttflush();
 		return;
 	}
@@ -678,7 +1188,7 @@ update(int modelinecolor)
 			ucopy(vp1, vp2);
 		}
 	}
-	ttmove(currow, curcol - lbound);
+	ttmove(currow, curleft + curcol - lbound);
 	ttflush();
 }
 
@@ -698,7 +1208,7 @@ ucopy(struct video *vvp, struct video *pvp)
 	pvp->v_hash = vvp->v_hash;
 	pvp->v_cost = vvp->v_cost;
 	pvp->v_color = vvp->v_color;
-	bcopy(vvp->v_text, pvp->v_text, ncol);
+	bcopy(vvp->v_text, pvp->v_text, ncol * sizeof(*vvp->v_text));
 }
 
 /*
@@ -710,27 +1220,32 @@ void
 updext(int currow, int curcol)
 {
 	struct line	*lp;			/* pointer to current line */
-	int	 j;			/* index into line */
+	int	 s, e, width;
 
-	if (ncol < 2)
+	width = textcols(curwp);
+	if (width < 2)
 		return;
 
 	/*
 	 * calculate what column the left bound should be
-	 * (force cursor into middle half of screen)
+	 * (force cursor into middle half of the window)
 	 */
-	lbound = curcol - (curcol % (ncol >> 1)) - (ncol >> 2);
+	lbound = curcol - (curcol % (width >> 1)) - (width >> 2);
 
 	/*
 	 * scan through the line outputting characters to the virtual screen
 	 * once we reach the left edge
 	 */
-	vtmove(currow, -lbound);		/* start scanning offscreen */
+	vtbounds(curwp);
+	extwp = curwp;
+	vtmove(currow, vtleft - lbound);	/* start scanning offscreen */
 	lp = curwp->w_dotp;			/* line to output */
-	for (j = 0; j < llength(lp); ++j)	/* until the end-of-line */
-		vtpute(lgetc(lp, j), curwp);
+	hlsetup(curwp);
+	synsetup(curwp);
+	hlrange(curwp->w_dotline, llength(lp), &s, &e);
+	vtputel(lp, curwp, s, e);		/* until the end-of-line */
 	vteeol();				/* truncate the virtual line */
-	vscreen[currow]->v_text[0] = '$';	/* and put a '$' in column 1 */
+	vtmark(vtleft);
 }
 
 /*
@@ -745,12 +1260,13 @@ updext(int currow, int curcol)
 void
 uline(int row, struct video *vvp, struct video *pvp)
 {
-	char  *cp1;
-	char  *cp2;
-	char  *cp3;
-	char  *cp4;
-	char  *cp5;
+	int   *cp1;
+	int   *cp2;
+	int   *cp3;
+	int   *cp4;
+	int   *cp5;
 	int    nbflag;
+	int    a, cur = 0;
 
 	if (vvp->v_color != pvp->v_color) {	/* Wrong color, do a	 */
 		ttmove(row, 0);			/* full redraw.		 */
@@ -773,9 +1289,16 @@ uline(int row, struct video *vvp, struct video *pvp)
 		cp2 = &vvp->v_text[ncol];
 #endif
 		while (cp1 != cp2) {
-			ttputc(*cp1++);
-			++ttcol;
+			a = *cp1 & VATTRMASK;
+			if (a != cur) {
+				cur = a;
+				ttattr((a & VSYNMASK) >> VSYNSHIFT,
+				    a & VREV);
+			}
+			ttcol += ttputcell(*cp1++ & ~VATTRMASK);
 		}
+		if (cur)
+			ttattr(SYN_NONE, FALSE);
 		ttcolor(CTEXT);
 		return;
 	}
@@ -816,11 +1339,30 @@ uline(int row, struct video *vvp, struct video *pvp)
 #endif
 		ttcolor(vvp->v_color);
 	while (cp1 != cp5) {
-		ttputc(*cp1++);
-		++ttcol;
+		a = *cp1 & VATTRMASK;
+		if (a != cur) {
+			cur = a;
+			ttattr((a & VSYNMASK) >> VSYNSHIFT, a & VREV);
+		}
+		ttcol += ttputcell(*cp1++ & ~VATTRMASK);
+	}
+	if (cur) {
+		ttattr(SYN_NONE, FALSE);
+		ttcolor(vvp->v_color);
 	}
 	if (cp5 != cp3)			/* Do erase.		 */
 		tteeol();
+}
+
+/*
+ * Output a mode name to the mode line, capitalized, report how long
+ * it was.
+ */
+static int
+vtputmode(const struct maps_s *m, struct mgwin *wp)
+{
+	vtputc(toupper((unsigned char)m->p_name[0]), wp);
+	return (vtputs(&m->p_name[1], wp) + 1);
 }
 
 /*
@@ -835,14 +1377,26 @@ void
 modeline(struct mgwin *wp, int modelinecolor)
 {
 	int	n, md;
+	struct maps_s *major;
 	struct buffer *bp;
 	char sl[21];		/* Overkill. Space for 2^64 in base 10. */
 	int len;
 
 	n = wp->w_toprow + wp->w_ntrows;	/* Location.		 */
-	vscreen[n]->v_color = modelinecolor;	/* Mode line color.	 */
 	vscreen[n]->v_flag |= (VFCHG | VFHBAD);	/* Recompute, display.	 */
-	vtmove(n, 0);				/* Seek to right line.	 */
+	vtbounds(wp);
+	vtleft = wp->w_leftcol;		/* no gutter on the modeline */
+	/*
+	 * A narrow window can share this row with a neighbor's text,
+	 * so the row color cannot be used; the standout comes from
+	 * the per-cell attribute instead.
+	 */
+	if (wp->w_ntcols != ncol) {
+		vscreen[n]->v_color = CTEXT;
+		vtattr = (modelinecolor == CMODE) ? VREV : 0;
+	} else
+		vscreen[n]->v_color = modelinecolor;	/* Mode line color. */
+	vtmove(n, vtleft);			/* Seek to right line.	 */
 	bp = wp->w_bufp;
 	vtputc('-', wp);			/* Encoding in GNU Emacs */
 	vtputc(':', wp);			/* End-of-lline style    */
@@ -890,13 +1444,15 @@ modeline(struct mgwin *wp, int modelinecolor)
 
 	vtputc('(', wp);
 	++n;
-	for (md = 0; ; ) {
-		vtputc(toupper(bp->b_modes[md]->p_name[0]), wp);
-		n += vtputs(&bp->b_modes[md]->p_name[1], wp) + 1;
-		if (++md > bp->b_nmodes)
-			break;
+	/* the major mode first, then the modes that qualify it */
+	major = buf_major(bp);
+	n += vtputmode(major, wp);
+	for (md = 1; md <= bp->b_nmodes; md++) {
+		if (bp->b_modes[md] == major)
+			continue;
 		vtputc(' ', wp);
 		++n;
+		n += vtputmode(bp->b_modes[md], wp);
 	}
 	/* XXX These should eventually move to a real mode */
 	if (macrodef == TRUE)
@@ -927,10 +1483,8 @@ modeline(struct mgwin *wp, int modelinecolor)
 		n += vtputs(buf, wp);
 	}
 
-	while (n < ncol) {			/* Pad out.		 */
-		vtputc(' ', wp);
-		++n;
-	}
+	vteeol();				/* Pad out.		 */
+	vtattr = 0;
 }
 
 /*
@@ -939,11 +1493,21 @@ modeline(struct mgwin *wp, int modelinecolor)
 int
 vtputs(const char *s, struct mgwin *wp)
 {
-	int n = 0;
+	int cp, len, n = 0;
+	int avail = strlen(s);
 
 	while (*s != '\0') {
-		vtputc(*s++, wp);
-		++n;
+		if (utf8_mode &&
+		    (cp = utf8_decode(s, avail, &len)) != -1) {
+			vtputcp(cp);
+			s += len;
+			avail -= len;
+			n += utf8_width(cp);
+		} else {
+			vtputc(*s++, wp);
+			avail--;
+			++n;
+		}
 	}
 	return (n);
 }
@@ -960,7 +1524,7 @@ void
 hash(struct video *vp)
 {
 	int	i, n;
-	char   *s;
+	int    *s;
 
 	if ((vp->v_flag & VFHBAD) != 0) {	/* Hash bad.		 */
 		s = &vp->v_text[ncol - 1];

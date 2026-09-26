@@ -121,6 +121,7 @@ applymacro(int f, int n)
 {
 	struct line	*odotp, *omarkp, *tmarkp;
 	int	odoto, odotline, omarko, omarkline, tmarko, tmarkline;
+	int	tmarkact;
 
 	if (curwp->w_markp == NULL) {
 		dobeep();
@@ -143,8 +144,13 @@ applymacro(int f, int n)
 	tmarkp = curwp->w_markp;
 	tmarko = curwp->w_marko;
 	tmarkline = curwp->w_markline;
+	tmarkact = curwp->w_markact;
 
 	while (curwp->w_dotline < curwp->w_markline) {
+		/* each line starts a fresh command chain */
+		lastflag = thisflag;
+		thisflag = 0;
+
 		gotobol(FFRAND, 1);
 		executemacro(FFRAND, 1);
 		forwline(FFRAND, 1);
@@ -153,6 +159,7 @@ applymacro(int f, int n)
 		curwp->w_markp = tmarkp;
 		curwp->w_marko = tmarko;
 		curwp->w_markline = tmarkline;
+		curwp->w_markact = tmarkact;
 	}
 
 	/* (save-mark-and-excursion) restore the state of the "." and mark */

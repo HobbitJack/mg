@@ -3,6 +3,234 @@ Change Log
 
 All relevant changes to the project are documented in this file.
 
+[v4.2][UNRELEASED]
+---------------------
+
+### Changes
+
+- New secure mode, `-S` or `MGSECURE=1`, for use as the editor of a
+  restricted shell.  Commands that run other programs are disabled, the
+  startup file is skipped, and `-b`/`-u` are refused
+- New single-file mode, `-s`, where only the files named on the command
+  line can be visited, inserted, or written.  Combine with `-S` for the
+  editor of a restricted shell
+- New `display-line-numbers-mode`, showing line numbers in a gutter at the
+  left of the text.  Off by default; set it per buffer, or with
+  `set-default-mode linum` in `~/.mg`, issue #31
+- The minibuffer reads keys through the same keymap as the editor, so
+  Home, End, Delete, Ctrl and Meta with the arrow keys, M-b, M-f, M-d and
+  M-DEL now move and delete by word and character there too, instead of
+  inserting the terminal's escape sequence
+- Minibuffer history: Up, Down, M-p and M-n walk what was entered before
+  at the same kind of prompt, one history each for command names, buffer
+  names and file names, and one per other prompt
+- New `whitespace-cleanup`, as in GNU Emacs: trailing whitespace, empty
+  lines at the start and end of the buffer, and indentation redone with
+  tabs, or spaces in `no-tab-mode`; the region only when the mark is set
+
+### Fixes
+
+- Fix shell command injection when opening a `.gz` file whose name
+  contains shell metacharacters
+- Draw the divider between side by side windows on every row of a wrapped
+  line; it kept stale cells on the rows the line continued from
+
+[v4.1][] - 2026-09-07
+---------------------
+
+### Changes
+
+- Render double-width UTF-8 characters in two terminal columns, keeping
+  incremental redraws and cursor positioning aligned
+- New `line-wrap-mode`, where a line too long for the window continues on the
+  rows below instead of being truncated with a `$`.  A continued row ends
+  with an arrow, or a backslash outside UTF-8 locales.  Off by default; set
+  it per buffer, or with `set-default-mode wrap` in `~/.mg`
+- Character widths follow Unicode 17.  Emoji, and the scripts added since
+  Unicode 5, are measured correctly instead of being drawn one column wide
+  and overlapping whatever followed them
+- Shift and PgUp/PgDn mark text a page at a time, completing the shift-select
+  support from v4.0: new commands `shift-scroll-down` and `shift-scroll-up`
+- The mode line names the major mode where it used to say Fundamental, with
+  the modes that qualify it after: a python buffer reads `(Python Notab
+  Indent)` and a text buffer `(Text Fill)`.  Fundamental is shown when there
+  is no major mode, which is what it means
+- The buffer list mode is called `buffer-list` rather than `listbufmap`, its
+  internal keymap name, now that the mode line leads with it
+- New `yaml-mode` with syntax highlighting, detected for *.yml, *.yaml,
+  `.clang-format` and `.yamllint`.  Whitespace is structure in YAML, so the
+  mode indents two columns with spaces only, a tab being a syntax error.
+  Block scalars introduced by `|` or `>` are left as text, so the shell in a
+  `run: |` step is not colored as YAML
+- New `text-mode` for prose, which turns on `auto-fill-mode`, detected for
+  *.txt, *.text, the suffixless files a source tree keeps like README and
+  LICENSE, and the file mutt hands its editor
+- New `git-commit-mode` for COMMIT_EDITMSG and friends: the comments git adds
+  are dimmed, trailers stand out, and a `commit -v` diff is colored on the
+  diff-mode rules.  Bound like Magit's git-commit mode: `C-c C-c` finishes the
+  commit, `C-c C-k` aborts it, and `C-c C-s`, `C-c C-a`, `C-c C-r`, `C-c C-t`
+  add Signed-off-by, Acked-by, Reviewed-by and Tested-by trailers
+- New `diff-mode` with syntax highlighting for patches, detected for *.diff,
+  *.patch and *.rej.  Removed and added lines are only colored inside a hunk,
+  so the message of a mailed patch keeps its own dashes
+- New `conf-mode` with syntax highlighting for configuration files, detected
+  for *.conf, *.cfg, *.ini, *.toml, systemd units, .desktop entries, fstab,
+  ssh_config, sshd_config, ~/.gitconfig, ~/.editorconfig, and the .config
+  and *defconfig files written by kconfig
+- New `makefile-mode` with syntax highlighting and hard tabs, detected for
+  Makefile, GNUmakefile, *.mk, *.make, and `#!/usr/bin/make -f` scripts
+- `shell-script-mode` is now also detected for *.bash, *.ksh, *.zsh, and
+  rc files like `~/.bashrc` and `~/.profile`
+- `auto-execute` patterns now also match against the file's basename, so
+  `auto-execute .bashrc shell-script-mode` works without a leading `*/`
+- Syntax highlighting: `$(...)` variable references are now colored like
+  `${...}`, including nested ones in makefiles
+
+### Fixes
+
+- Fix marking text with shifted keys in VTE-based terminals when built
+  `--without-curses`: the ansi backend now enters the alternate screen like
+  the terminfo backend.  As a side effect the shell's content and scrollback
+  survive an editing session
+- Report errors in the startup file again.  The message was written to the
+  echo line and immediately covered, by the help text or by the line count
+  of the files named on the command line, so a `~/.mg` that failed on its
+  first line looked like it had never been read at all, issue #41
+- `set-tab-width` in `~/.mg` now also applies to *scratch*, which is created
+  before the startup file is read, issue #41
+- Raise the number of modes a buffer can hold from four to six.  A major
+  mode that brings two helper modes of its own, like `python-mode`, no
+  longer runs out of room and gets dropped when the buffer already carries
+  a default mode
+- A mode named in `~/.mg`, such as `auto-fill-mode`, now becomes a default
+  for the files opened afterwards.  It used to be applied to *scratch*, the
+  only buffer in existence while the startup file is read, and so had no
+  effect on anything the user went on to edit
+- The tab width a mode wants now follows the startup file like the mode
+  itself.  `yaml-mode` in `~/.mg` used to leave the files opened afterwards
+  at width eight, with only *scratch* getting the two the mode asked for
+- Default modes from `~/.mg` now reach the buffers that already exist, in
+  particular *scratch*.  The mode list was copied to them but the count was
+  not, so the modes were there and inert, the same shape as issue #41
+- Update stale links in documentation, issue #40
+- `markdown-mode` no longer colors the indented continuation lines of a
+  list item as a verbatim block.  An indented block is only verbatim when
+  a blank line precedes it
+
+[v4.0][] - 2026-07-10
+---------------------
+
+The UTF-8 release: multibyte text can now be typed, displayed, and
+edited in UTF-8 locales.  Also new: syntax highlighting, a visible
+region, and side by side windows.
+
+### Changes
+
+- Initial UTF-8 support, active in UTF-8 locales:
+  - Multibyte characters display as single characters, cursor motion
+    and delete operate on whole characters, and files always round
+    trip byte for byte
+  - Limitations, see mg(1): every character is drawn one column wide,
+    mini-buffer editing is still byte-wise, case folding is ASCII only
+- 8-bit character input works out of the box: `meta-key-mode` is now
+  disabled by default, use `(meta-key-mode 1)` in `~/.mg` to get the
+  old behavior back.  Terminals that send Meta as an ESC prefix, which
+  is all of them these days, are unaffected
+- Character class table updated from DEC multinational to Latin-1:
+  word motion, case conversion, and case-insensitive search now treat
+  Ð, Þ, ð, þ as letters, and no longer the × and ÷ signs
+- Visual mark mode: the region between mark and dot is drawn in
+  reverse video, like transient-mark-mode in GNU Emacs.  New command
+  `visual-mark-mode` toggles it, enabled by default
+- Shift and the arrow keys mark text, like in GNU Emacs, by word and
+  paragraph with control held too.  The first unshifted command drops
+  the selection; a mark set with `C-SPC` is left alone
+- Syntax highlighting of comments, strings, keywords, types, numbers,
+  and preprocessor directives in buffers with a language mode, such as
+  `c-mode`.  New command `font-lock-mode` toggles it, enabled by
+  default.  Terminals without color show plain text.  C and C++
+  files enable `c-mode` automatically
+- New command `shell-script-mode` with shell highlighting rules:
+  POSIX reserved words, builtins, and `$variables`.  Also sets tab
+  width 8 with hard tabs, for here documents, and RET keeps the
+  indent.  Enabled automatically for *.sh files and files with a #!
+  line naming a Bourne compatible shell
+- New command `python-mode` with python highlighting rules: comments,
+  strings including the triple-quoted kind, keywords, built-ins, and
+  decorators.  Also sets four column indent steps with spaces only,
+  RET keeps the indent, and TAB indents like the previous line, one
+  level deeper after a colon; TAB again steps back one level at a
+  time and wraps around.  Enabled automatically for *.py files and
+  #! lines naming python
+- New command `markdown-mode` with highlighting rules for the common
+  markdown core: headings, fenced and indented code blocks, block
+  quotes, horizontal rules, list markers, inline code, emphasis, and
+  links.  Headings are drawn in bold.  Enabled automatically for
+  *.md and *.markdown files
+- New command `split-window-horizontally`, bound to `C-x 3` like GNU
+  Emacs: side by side windows, freely mixed with `C-x 2`
+- Resizing the terminal grows or shrinks the focused window; the
+  other windows keep their size and move.  Pop-ups like the quick
+  help no longer swallow the new rows, and side by side layouts
+  survive width and height changes
+- New command `balance-windows`, bound to `C-x +` like GNU Emacs:
+  evens out the window sizes in any layout, heights and widths
+  alike; the quick help pop-up keeps its height
+- Move between windows with Meta and the arrow keys: new commands
+  `windmove-up`, `-down`, `-left` and `-right` select the window in
+  that direction, like windmove in GNU Emacs.  `M-left` and `M-right`
+  no longer do word motion; `C-left` and `C-right` still do
+- Resize windows with Meta, Shift and the arrow keys: the window
+  divider travels with the arrow.  Also new: GNU Emacs' commands
+  `enlarge-window-horizontally` and `shrink-window-horizontally`, on
+  `C-x }` and `C-x {`
+- Pop-up buffers, like the quick help, open below the current window
+  instead of replacing the other one in side by side layouts.  The
+  quick help is dismissed with `q` and no longer disturbs the window
+  layout when closed
+- New command `require-final-newline <nil | T | ask>`
+- New command `use-short-answers`: a single y or n answers important
+  questions.  Enabled by default, unlike GNU Emacs; get the strict
+  behavior back with `use-short-answers 0` in `~/.mg`.  From PR #37
+  by Glubbfreund
+- The startup help text in the echo line is dismissed on the first
+  key press, or after ten seconds.  Keep the old always-on behavior
+  with `display-help-mode 1` in `~/.mg`
+- Smart TAB in c-mode and shell-script-mode: TAB indents the current
+  line, or every line in the region when the mark is active, like in
+  GNU Emacs.  Shell scripts indent like the previous non-blank line
+- `M-q` reflows one list item at a time instead of the whole list,
+  with continuation lines aligned under the item text, and refills
+  block quotes keeping the > prefix.  Paragraph motion, mark and
+  kill treat list items as paragraphs too
+- `M-g g` and `M-g M-g` run goto-line, like GNU Emacs 22 and later.
+  The old `C-x g` binding remains
+- Dired: new command `dired-up-directory`, bound to `^`, also used by
+  `dired-jump`, from OpenBSD
+- `C-u M-!` and `C-u M-|` insert the shell command output in the
+  current buffer instead of a separate one, from OpenBSD
+- C-mode: respect user defined tab width in indentation, by Daniel
+  Hennigar
+- Mg tutorial updated and converted to Markdown format
+- Support `+LINE:COLUMN FILE` startup postion, by Delyan Angelov
+- The mini-buffer now displays the initial help text for 10 seconds,
+  or until the user starts typing.  Also, the cursor is now shown in
+  the main edit window instead of the mini-buffer
+
+### Fixes
+
+- Sync with OpenBSD, as of March 2026:
+  - Fix `replace-regexp` looping forever on `(replace-regexp "^.*$"
+    "")` and replacing anchored patterns more than once per line
+  - Saving the `*scratch*` buffer no longer prompts for a file path
+    when there are no changes to save
+  - Plug memory leaks in the interpreter and word handling routines,
+    from Han Boetes
+  - Handle `strdup()` failure in several places, from Han Boetes
+  - Fix wrongly sized externs, found by Gentoo building with `-flto`
+  - Fix `auto-indent-mode` with custom tab widths
+- Fix build with dired disabled
+- Fix missing mini-buffer help texts
 
 [v3.7][] - 2023-08-13
 ---------------------
@@ -301,7 +529,8 @@ set as Mg3a.
 	functions.  Some simply marked as "don't care"
   - Fix missing initialization of stack variables
 
-[UNRELEASED]: https://github.com/troglobit/mg/compare/v3.7...HEAD
+[UNRELEASED]: https://github.com/troglobit/mg/compare/v4.1...HEAD
+[v4.0]:       https://github.com/troglobit/mg/compare/v3.7...v4.0
 [v3.7]:       https://github.com/troglobit/mg/compare/v3.6...v3.7
 [v3.6]:       https://github.com/troglobit/mg/compare/v3.5...v3.6
 [v3.5]:       https://github.com/troglobit/mg/compare/v3.4...v3.5
@@ -312,6 +541,6 @@ set as Mg3a.
 [v3.0.2]:     https://github.com/troglobit/mg/compare/v3.0.1..v3.0.2
 [v3.0.1]:     https://github.com/troglobit/mg/compare/v3.0..v3.0.1
 [v3.0]:       https://github.com/troglobit/mg/compare/TAIL...v3.0
-[Mg2a]:       http://cvsweb.openbsd.org/cgi-bin/cvsweb/src/usr.bin/mg/
-[Mg3a]:       http://www.bengtl.net/files/mg3a/
+[Mg2a]:       https://cvsweb.openbsd.org/src/usr.bin/mg/
+[Mg3a]:       https://web.archive.org/web/20170413230721/http://www.bengtl.net/files/mg3a/
 [libite]:     https://github.com/troglobit/libite/

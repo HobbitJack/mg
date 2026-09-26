@@ -213,18 +213,40 @@ apropos_command(int f, int n)
 /*
  * Show quick help to get started with Mg
  */
+static int	 quickdismiss(int, int);
+
+static PF quick_q[] = {
+	quickdismiss		/* q */
+};
+
+static struct KEYMAPE (1) quickmap = {
+	1,
+	1,
+	rescan,
+	{
+		{
+			'q', 'q', quick_q, NULL
+		}
+	}
+};
+
+static int	 quick_split;	/* the pop-up window is our own */
+
 int
 quickhelp(int f, int n)
 {
+	static int	 initialized = 0;
 	struct buffer	*bp;
-	int		 rc;
+	struct mgwin	*wp;
+	int	 nwind;
 
 	/* If already displayed, toggle off */
-	bp = bfind("*quick*", FALSE);
-	if (bp) {
-		killbuffer(bp);
-		onlywind(f, n);
-		return (TRUE);
+	if (bfind("*quick*", FALSE) != NULL)
+		return (quickdismiss(f, n));
+
+	if (!initialized) {
+		maps_add((KEYMAP *)&quickmap, "quick");
+		initialized = 1;
 	}
 
 	/* Create new */
@@ -232,29 +254,89 @@ quickhelp(int f, int n)
 	if (bclear(bp) != TRUE)
 		return (FALSE);
 	bp->b_flag |= BFREADONLY;
+	bp->b_modes[0] = name_mode("fundamental");
+	bp->b_modes[1] = name_mode("quick");
+	bp->b_nmodes = 1;
 
 	addline(bp, "FILE             BUFFER          WINDOW           MARK/KILL       MISC");
-	addline(bp, "C-x C-c exit     C-x b   switch  C-x 0 only other C-space mark    C-_ undo");
-	addline(bp, "C-x C-f find     C-x k   close   C-x 1 only this  C-w     kill-rg C-s search");
-	addline(bp, "C-x C-s save     C-x C-b list    C-x 2 split two  C-k     kill-ln C-r r-search");
-	addline(bp, "C-x s   save-all C-x h   mark    C-x ^ enlarge    C-y     yank    M-% replace");
-	addline(bp, "C-x i   insert   C-x g   goto-ln C-x o other win  C-x C-x swap    M-q reformat");
-
-	rc = popbuftop(bp, WNONE);
-	if (rc == TRUE) {
-		int n;
-
-		prevwind(0, 0);
-
-		/* Attempt to shkrink window to size fo quick help */
-		n = curwp->w_ntrows - 6;
-		shrinkwind(FFRAND, n);
-
-		prevwind(0, 0);
+	addline(bp, "C-x C-c exit     C-x b   switch  C-x 2/3 split    C-SPC mark      C-_ undo");
+	addline(bp, "C-x C-f find     C-x k   close   C-x 0/1 del/only C-w   kill-reg. C-s search");
+	addline(bp, "C-x C-s save     C-x C-b list    C-x +   balance  C-k   kill-line C-r r-search");
+	if (utf8_mode) {
+		addline(bp, "C-x s   save-all C-x h   mark    M-\xe2\x86\x94/\xe2\x86\x95   move     C-y     yank    M-% replace");
+		addline(bp, "C-x i   insert   C-x g   goto-ln M-S-\xe2\x86\x94/\xe2\x86\x95 resize   C-x C-x swap    M-q reformat");
+	} else {
+		addline(bp, "C-x s   save-all C-x h   mark    M-arrows move    C-y     yank    M-% replace");
+		addline(bp, "C-x i   insert   C-x g   goto-ln M-S-arrows size  C-x C-x swap    M-q reformat");
 	}
 
-	return rc;
+	nwind = 0;
+	for (wp = wheadp; wp != NULL; wp = wp->w_wndp)
+		nwind++;
+	if (popbuftop(bp, WNONE) != TRUE)
+		return (FALSE);
+	for (wp = wheadp; wp != NULL; wp = wp->w_wndp)
+		nwind--;
+	quick_split = nwind < 0;
+
+	quickresize();
+	return (TRUE);
 }
+
+/*
+ * Shrink the quick help pop-up back to the height of its text, by
+ * moving its top seam, or at the top of the screen its bottom one.
+ * Also called after balance-windows, which would otherwise resize
+ * it like any other window.
+ */
+void
+quickresize(void)
+{
+	struct buffer	*bp;
+	struct mgwin	*wp;
+	int	 delta;
+
+	if ((bp = bfind("*quick*", FALSE)) == NULL)
+		return;
+	for (wp = wheadp; wp != NULL; wp = wp->w_wndp)
+		if (wp->w_bufp == bp)
+			break;
+	if (wp == NULL || (delta = wp->w_ntrows - 6) <= 0)
+		return;
+	if (!moveseam(wp->w_toprow - 1, delta, FALSE))
+		(void)moveseam(wp->w_toprow + wp->w_ntrows, -delta, FALSE);
+	wp->w_linep = lforw(bp->b_headp);
+}
+
+/*
+ * Close the quick help: delete its window, keeping the rest of
+ * the layout, and drop the buffer.  Bound to q in the pop-up.
+ */
+static int
+quickdismiss(int f, int n)
+{
+	struct buffer	*bp;
+	struct mgwin	*wp, *owp;
+
+	if ((bp = bfind("*quick*", FALSE)) == NULL)
+		return (TRUE);
+	for (wp = wheadp; wp != NULL; wp = wp->w_wndp)
+		if (wp->w_bufp == bp)
+			break;
+	if (wp != NULL && quick_split && wheadp->w_wndp != NULL) {
+		owp = curwp == wp ? NULL : curwp;
+		curwp = wp;
+		curbp = wp->w_bufp;
+		(void)delwind(FFRAND, 1);
+		if (owp != NULL) {
+			curwp = owp;
+			curbp = owp->w_bufp;
+		}
+	}
+	/* a reused window gets another buffer from killbuffer */
+	return (killbuffer(bp));
+}
+
 
 /*
  * This function tries to locate the 'tutorial' file, opens a buffer
@@ -263,14 +345,22 @@ quickhelp(int f, int n)
 int
 tutorial(int f, int n)
 {
+	static char *variants[] = {
+		DATADIR "/tutorial.md",
+		DATADIR "/tutorial.md.gz",
+		DATADIR "/tutorial.gz",
+		DOCDIR "/tutorial.md",
+		DOCDIR "/tutorial.md.gz",
+		DOCDIR "/tutorial.gz",
+	};
 	struct buffer	*bp, *oldbp = curbp;
-	char		*fn;
+	char		*fn = NULL;
+	size_t		 i;
 
 	bp = bfind("*tutorial*", TRUE);
 	if (bclear(bp) != TRUE) {
 		return (FALSE);
 	}
-	bp->b_flag |= BFREADONLY;
 
 	curbp = bp;
 	if (showbuffer(bp, curwp, WFFULL) != TRUE) {
@@ -280,24 +370,34 @@ tutorial(int f, int n)
 		return (FALSE);
 	}
 
-	while (1) {
-		fn = DATADIR "/tutorial.gz";
-		if (!access(fn, R_OK))
+	for (i = 0; i < NELEMS(variants); i++) {
+		fn = variants[i];
+		if (access(fn, R_OK))
+			fn = NULL;
+		else
 			break;
-		fn = DATADIR "/tutorial";
-		if (!access(fn, R_OK))
-			break;
-		fn = DOCDIR "/tutorial.gz";
-		if (!access(fn, R_OK))
-			break;
-		fn = DOCDIR "/tutorial";
-		if (!access(fn, R_OK))
-			break;
+	}
+
+	if (!fn) {
 		ewprintf("Sorry, cannot find the tutorial on this system.");
 		goto fail;
 	}
+
 	if (readin(fn) != TRUE)
 		goto fail;
+
+	/*
+	 * The tutorial is markdown, show it with the colors on.  It
+	 * is the reader's own copy: editable, for the exercises, and
+	 * detached from the installed file so it cannot be saved
+	 * back over it.
+	 */
+	bp->b_modes[0] = name_mode("fundamental");
+	bp->b_modes[1] = name_mode("markdown");
+	bp->b_nmodes = 1;
+	bp->b_flag &= ~BFREADONLY;
+	bp->b_fname[0] = '\0';
+	curwp->w_rflag |= WFFULL;
 
 	return (TRUE);
 }

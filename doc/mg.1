@@ -1,7 +1,7 @@
 .\"	$OpenBSD: mg.1,v 1.138 2024/07/09 14:51:37 op Exp $
 .\" This file is in the public domain.
 .\"
-.Dd $Mdocdate: July 9 2024 $
+.Dd $Mdocdate: July 10 2026 $
 .Dt MG 1
 .Os
 .Sh NAME
@@ -9,11 +9,11 @@
 .Nd emacs-like text editor
 .Sh SYNOPSIS
 .Nm mg
-.Op Fl hnR
+.Op Fl hnRsS
 .Op Fl b Ar file
 .Op Fl f Ar mode
 .Op Fl u Ar file
-.Op + Ns Ar number
+.Op + Ns Ar line Ns Oo : Ns Ar column Oc
 .Op Ar
 .Sh DESCRIPTION
 .Nm
@@ -36,11 +36,11 @@ support may be disabled.
 .Pp
 The options are as follows:
 .Bl -tag -width Ds
-.It + Ns Ar number
-Go to the line specified by number (do not insert
+.It + Ns Ar line Ns Oo : Ns Ar column Oc
+Go to the specified line, and optionally column (do not insert
 a space between the
 .Sq +
-sign and the number).
+sign and the line number, or around the colon).
 If a negative number is specified, the line number counts
 backwards from the end of the file i.e. +-1 will be the last
 line of the file, +-2 will be second last, and so on.
@@ -62,12 +62,58 @@ Show usage text and exit.
 Turn off backup file generation.
 .It Fl R
 Files specified on the command line will be opened read-only.
+.It Fl s
+Single-file mode: only the files named on the command line can be
+visited, inserted, or written; anything else is refused.
+The startup file is not read, backups are off as with
+.Fl n ,
+and
+.Fl b
+and
+.Fl u
+are refused.
+Combine with
+.Fl S
+for the editor of a restricted shell.
+.It Fl S
+Secure mode, for use as the editor of a restricted shell.
+Commands that run other programs are disabled:
+.Ic suspend-emacs ,
+.Ic shell-command ,
+.Ic shell-command-on-region ,
+.Ic compile ,
+.Ic grep ,
+.Ic diff-buffer-with-file ,
+all of dired, and the cscope commands.
+The startup file is not read and
+.Fl b
+and
+.Fl u
+are refused.
+Files ending in
+.Pa .gz
+are opened as-is instead of being decompressed.
 .It Fl u Ar file
 Use
 .Ar file
 as the startup file, instead of the default
 .Pa ~/.mg .
 .El
+.Sh MINIBUFFER
+Commands that need a name or a string ask for it on the bottom line,
+the minibuffer.
+The keys that move and delete in a buffer do the same there, as bound
+in the fundamental mode: the arrow keys, Home, End and Delete, and
+with Ctrl or Meta the word at a time variants.
+In addition, C-u and C-x delete what is before the cursor, C-w the
+word before it, C-k keeps the rest of the line in the kill buffer, and
+C-q inserts the next key as typed.
+.Pp
+Each kind of prompt keeps what was entered at it before: Up, Down,
+M-p and M-n walk those lines, and going back down past the newest
+restores what was being typed.
+Command names, buffer names and file names share one history each;
+any other prompt has its own.
 .Sh WINDOWS AND BUFFERS
 When a file is loaded into
 .Nm ,
@@ -260,14 +306,18 @@ exchange-point-and-mark
 start-kbd-macro
 .It C-x \&)
 end-kbd-macro
-.Id F4
+.It F4
 end-or-call-last-kbd-macro
+.It C-x +
+balance-windows
 .It C-x 0
 delete-window
 .It C-x 1
 delete-other-windows
 .It C-x 2
 split-window-vertically
+.It C-x 3
+split-window-horizontally
 .It C-x 4 C-f
 find-file-other-window
 .It C-x 4 C-g
@@ -308,6 +358,10 @@ previous-window
 save-some-buffers
 .It C-x u
 undo
+.It C-x {
+shrink-window-horizontally
+.It C-x }
+enlarge-window-horizontally
 .It C-y
 yank
 .It C-z
@@ -332,16 +386,29 @@ end-of-buffer
 delete-horizontal-space
 .It M-^
 join-line
-.It M-b, C-left, M-left
+.It M-b, C-left
 backward-word
 .It M-c
 capitalize-word
 .It M-d
 kill-word
-.It M-f, C-right, M-right
+.It M-f, C-right
 forward-word
+.It M-g g, M-g M-g
+goto-line
 .It M-h
 mark-paragraph
+.It M-up, M-down, M-left, M-right
+windmove-up, windmove-down, windmove-left, windmove-right
+.It M-S-up, M-S-down, M-S-left, M-S-right
+resize-window-up, resize-window-down, resize-window-left,
+resize-window-right
+.It S-up, S-down, S-left, S-right, S-Home, S-End
+mark text while moving, like shift-select-mode in GNU Emacs
+.It S-PgUp, S-PgDn
+mark text by page
+.It C-S-up, C-S-down, C-S-left, C-S-right
+mark text by word and paragraph
 .It M-l
 downcase-word
 .It M-m
@@ -426,6 +493,10 @@ that is, specify a filename pattern
 (conforming to the shell's filename globbing rules) and an associated
 function to execute when a file matching the specified pattern
 is read into a buffer.
+The pattern is tried against both the full path and the last path
+component, so
+.Ql .bashrc
+matches that file in any directory.
 .It Ic auto-fill-mode
 Toggle auto-fill mode (sometimes called
 .Ic mail-mode )
@@ -434,11 +505,15 @@ where text inserted past the fill column is automatically wrapped
 to a new line.
 Can be set globally with
 .Ic set-default-mode .
+Naming it in the startup file does the same, since there is no buffer
+there yet to toggle it in.
 .It Ic auto-indent-mode
 Toggle indent mode in the current buffer,
 where indentation is preserved after a newline.
 Can be set globally with
 .Ic set-default-mode .
+Naming it in the startup file does the same, since there is no buffer
+there yet to toggle it in.
 .It Ic back-to-indentation
 Move the dot to the first non-whitespace character on the current line.
 .It Ic backup-to-home-directory
@@ -461,6 +536,10 @@ paragraphs.
 Paragraphs are delimited by <NL><NL> or <NL><TAB> or <NL><SPACE>.
 .It Ic backward-word
 Move cursor backwards by the specified number of words.
+.It Ic balance-windows
+Even out the sizes of all windows, heights and widths alike, like
+in GNU Emacs.
+The quick help pop-up keeps its height.
 .It Ic beginning-of-buffer
 Move cursor to the top of the buffer.
 If set, keep mark's position, otherwise set at current position.
@@ -483,6 +562,10 @@ Toggle bsmap mode, where DEL and C-h are swapped.  This may be needed on
 some systems if the backspace key doesn't work correctly.
 .It Ic c-mode
 Toggle a KNF-compliant mode for editing C program files.
+TAB indents the current line, or every line in the region when the
+mark is active, like in GNU Emacs.
+Files named *.c and *.h get the mode automatically, as do C++
+sources and headers.
 .It Ic call-last-kbd-macro
 Invoke the keyboard macro.
 .It Ic capitalize-word
@@ -497,6 +580,18 @@ See also
 .It Ic column-number-mode
 Toggle whether the column number is displayed in the modeline.
 Enabled by default.
+.It Ic conf-mode
+Toggle configuration file mode, which selects the conf rules for
+syntax highlighting: comments started by # or ;, [section] headers,
+the key of a key = value pair, quoted strings, numbers, and words
+like yes, no and off.
+Enabling it also sets the tab width to eight, which is what
+.Pa /etc
+is written for.
+Files named *.conf, *.cfg, *.ini and *.toml get the mode
+automatically, as do systemd units, .desktop entries, fstab,
+ssh_config, sshd_config, ~/.gitconfig, ~/.editorconfig, and the
+\&.config and *defconfig files written by kconfig.
 .It Ic copy-region-as-kill
 Copy all of the characters in the region to the kill buffer,
 clearing the mark afterwards.
@@ -581,13 +676,38 @@ Read a key from the keyboard, and look it up in the keymap.
 Display the name of the function currently bound to the key.
 .It Ic diff-buffer-with-file
 View the differences between buffer and its associated file.
+.It Ic diff-mode
+Toggle diff mode, which selects the diff rules for syntax
+highlighting: the lines that head a file, hunk headers, and the
+removed and added lines within a hunk.
+Lines outside a hunk are left alone, so the message of a mailed
+patch keeps its own dashes.
+Enabling it also sets the tab width to eight, which is what a diff
+quotes its source at.
+Files named *.diff, *.patch and *.rej get the mode automatically.
 .It Ic digit-argument
 Process a numerical argument for keyboard-invoked functions.
 .It Ic dired-jump
 Open a dired buffer containing the current buffer's directory location.
 .It Ic display-help-mode
-Toggle permanent display of short help text in status area.  Enabled by
-default.
+Toggle permanent display of short help text in status area.  By default
+the text is only shown at startup, until the first key press or for at
+most ten seconds.  Keep it with
+.Dq display-help-mode 1
+in
+.Pa ~/.mg ;
+a bare
+.Dq display-help-mode
+there toggles the default off.
+.It Ic display-line-numbers-mode
+Toggle line numbers in a gutter at the left of the text.
+The mode belongs to the buffer, so every window showing it gets the
+gutter.
+It is as wide as the number of lines in the buffer needs, plus a space,
+and a row a long line wraps onto is left blank.
+Can be set globally with
+.Ic set-default-mode ,
+or by naming it in the startup file.
 .It Ic display-time-mode
 Toggle whether the current time is displayed in the modeline.
 .It Ic downcase-region
@@ -616,6 +736,9 @@ progress, call the last keyboard macro.
 .It Ic enlarge-window
 Enlarge the current window by shrinking either the window above
 or below it.
+.It Ic enlarge-window-horizontally
+Widen the current window by taking columns from the window beside
+it, like in GNU Emacs.
 .It Ic eval-current-buffer
 Evaluate the current buffer as a series of
 .Nm
@@ -640,6 +763,8 @@ command if it is found, passing arguments as necessary.
 Print an error if there is anything wrong.
 .It Ic fill-paragraph
 Justify a paragraph, wrapping text at the current fill column.
+A list item is filled by itself with the continuation lines aligned
+under its text, and a block quote keeps its > prefix on every line.
 .It Ic find-file
 Select a file for editing.
 First check if the file can be found
@@ -658,6 +783,14 @@ Opens the specified file in a second buffer.
 Splits the current window if necessary.
 .It Ic find-tag
 Jump to definition of tag at dot.
+.It Ic font-lock-mode
+Toggle syntax highlighting, enabled by default.
+Comments, strings, keywords, types, numbers, and preprocessor
+directives are colored in buffers with a language mode, such as
+.Ic c-mode .
+Language modes are typically enabled per file type with
+.Ic auto-execute .
+Terminals without color support show plain text.
 .It Ic forward-char
 Move cursor forwards (or backwards, if
 .Va n
@@ -672,6 +805,41 @@ paragraphs.
 Paragraphs are delimited by <NL><NL> or <NL><TAB> or <NL><SPACE>.
 .It Ic forward-word
 Move the cursor forward by the specified number of words.
+.It Ic git-commit-mode
+Toggle git commit message mode, which selects the git-commit rules
+for syntax highlighting: the lines git comments out below the
+message, the trailers at the end of it, and the diff that
+.Nm git Cm commit Fl v
+appends, on the same rules as
+.Ic diff-mode .
+It also binds the keys Magit's git-commit mode made standard:
+.Pp
+.Bl -tag -width "C-c C-s" -compact
+.It Ic C-c C-c
+Hand the message back to git: save the buffer and exit.
+.It Ic C-c C-k
+Abort, after a confirmation.
+The buffer is emptied before it is saved, which is how git, and
+.Nm git Cm tag
+and
+.Nm git Cm rebase Fl i
+with it, are told to give up.
+.It Ic C-c C-s
+Add a Signed-off-by trailer for the committer, as read from
+.Nm git Cm var Cm GIT_COMMITTER_IDENT .
+.It Ic C-c C-a
+Add an Acked-by trailer.
+.It Ic C-c C-r
+Add a Reviewed-by trailer.
+.It Ic C-c C-t
+Add a Tested-by trailer.
+.El
+.Pp
+A trailer goes below the message and above the comments, joining the
+trailer block already there or opening one under the body.
+Dot does not move.
+Files named COMMIT_EDITMSG, MERGE_MSG, NOTES_EDITMSG, TAG_EDITMSG and
+git-rebase-todo get the mode automatically.
 .It Ic global-set-key
 Bind a key in the global (fundamental) key map.
 .It Ic global-unset-key
@@ -754,6 +922,22 @@ are left there and not moved to the
 directory.
 .It Ic line-number-mode
 Toggle whether the line number is displayed in the modeline.
+.It Ic line-wrap-mode
+Toggle line wrap mode, where a line too long for the window continues
+on the rows below it instead of being truncated with a
+.Ql $ .
+The mode belongs to the buffer, so every window showing it wraps.
+A continued row ends with an arrow, or with a backslash outside UTF-8
+locales, in a column held back from the text for it.
+.Ic scroll-up
+and
+.Ic scroll-down
+still move by whole lines, which is more than a screenful when the
+lines are long.
+Can be set globally with
+.Ic set-default-mode .
+Naming it in the startup file does the same, since there is no buffer
+there yet to toggle it in.
 .It Ic list-buffers
 Display the list of available buffers.
 The first column in the output indicates which buffer is active with a '>'
@@ -773,6 +957,17 @@ Toggle generation of backup files.
 Enabled by default.
 .It Ic make-directory
 Prompt the user for a path or directory name which is then created.
+.It Ic makefile-mode
+Toggle makefile mode, which selects the makefile rules for syntax
+highlighting: comments, strings, directives like include and ifdef,
+special targets like .PHONY, and variable references, both $(VAR)
+and automatic variables like $@ and $<.
+Enabling it also sets the tab width to eight and turns off
+.Ic no-tab-mode ,
+since recipe lines must start with a real tab.
+Files named Makefile, makefile, GNUmakefile, *.mk, and *.make, and
+files whose first line is a #! naming make, get the mode
+automatically.
 .It Ic mark-paragraph
 Mark
 .Va n
@@ -780,10 +975,17 @@ paragraphs.
 .It Ic mark-whole-buffer
 Marks whole buffer as a region by putting dot at the beginning and mark
 at the end of buffer.
+.It Ic markdown-mode
+Toggle markdown mode, which selects the markdown rules for syntax
+highlighting: headings, emphasis, inline code and fenced code
+blocks, links, block quotes, and list markers.
+Files named *.md and *.markdown get the mode automatically.
 .It Ic meta-key-mode
-When disabled, the meta key can be used to insert extended-ascii (8-bit)
-characters.
-When enabled, the meta key acts as usual.
+Toggle interpretation of the eighth bit of keyboard input as the Meta
+key.
+Disabled by default so that 8-bit characters can be typed.
+Terminals that send Meta as an escape prefix are unaffected by this
+setting.
 .It Ic negative-argument
 Process a negative argument for keyboard-invoked functions.
 .It Ic newline
@@ -793,6 +995,10 @@ Insert a newline, then enough tabs and spaces to duplicate the indentation
 of the previous line, respecting
 .Ic no-tab-mode
 and the buffer tab width.
+.It Ic next-history-element
+At a prompt, show the line entered after the one shown, or what was
+being typed once past the newest.
+Bound to M-n; the Down arrow does the same.
 .It Ic next-line
 Move forward
 .Va n
@@ -802,6 +1008,8 @@ Toggle notab mode.
 In this mode, spaces are inserted rather than tabs.
 This can be set globally with
 .Ic set-default-mode .
+Naming it in the startup file does the same, since there is no buffer
+there yet to toggle it in.
 .It Ic not-modified
 Turn off the modified flag in the current buffer.
 .It Ic open-line
@@ -819,11 +1027,16 @@ Toggle overwrite mode in the current buffer,
 where typing overwrites existing characters rather than inserting them.
 Can be set globally with
 .Ic set-default-mode .
+Naming it in the startup file does the same, since there is no buffer
+there yet to toggle it in.
 .It Ic prefix-region
 Inserts a prefix string before each line of a region.
 The prefix string is settable by using
 .Ic set-prefix-string
 or this command with a prefix argument.
+.It Ic previous-history-element
+At a prompt, show the line entered before the one shown.
+Bound to M-p; the Up arrow does the same.
 .It Ic previous-line
 Move backwards
 .Va n
@@ -843,6 +1056,21 @@ Suspend
 and switch to alternate screen, if available.
 .It Ic pwd
 Display current (global) working directory in the status area.
+.It Ic python-mode
+Toggle python mode, which selects the python rules for syntax
+highlighting: comments, strings including the triple-quoted kind,
+keywords, built-in functions, and decorators.
+Enabling it also sets the tab width to four, turns on
+.Ic no-tab-mode ,
+since whitespace is structure in python and a stray tab is a syntax
+error, and enables the indent mode so RET keeps the indentation.
+TAB indents the line like the previous non-blank line, one level
+deeper after a line ending in a colon, or every line in the region
+when the mark is active.
+Pressing TAB again steps the line back one level at a time and
+wraps around, since the line may belong to any enclosing block.
+Files named *.py and files with a #! line naming python get the
+mode automatically.
 .It Ic query-replace
 Query Replace.
 Search and replace strings selectively, prompting after each match.
@@ -887,6 +1115,15 @@ is negative, it is that line from the bottom.
 .It Ic redraw-display
 Refresh the display.
 Recomputes all window sizes in case something has changed.
+.It Ic resize-window-down
+.It Ic resize-window-left
+.It Ic resize-window-right
+.It Ic resize-window-up
+Move a window edge in the given direction: the edge on that side
+of the current window when it is a divider, otherwise the opposite
+one, so the arrow and the divider travel together.
+Bound to Meta, shift and an arrow key on terminals that send xterm
+style sequences.
 .It Ic require-final-newline <nil | T | ask>
 Require files to have a final newline added when saving.  By default
 this is disabled (nil).  To always add a missing newline set to
@@ -986,13 +1223,66 @@ Execute external command from mini-buffer.  With a universal argument
 Provide the text in region to the shell command as input.  With a
 universal argument (C-u), this command replaces the marked region
 with the output from the command.
+.It Ic shell-script-mode
+Toggle shell script mode, which selects the shell rules for syntax
+highlighting: comments, strings, keywords, built-in commands, and
+variable references.
+Enabling it also sets the tab width to eight, turns off
+.Ic no-tab-mode ,
+since here documents with <<- only strip real tabs, and enables the
+indent mode so RET keeps the indentation of continuation lines.
+TAB indents the line like the previous non-blank line, or every line
+in the region when the mark is active; on a blank line it inserts a
+real tab, for here documents.
+Files named *.sh, *.bash, *.ksh, *.zsh, shell rc files such as
+\&.bashrc, .profile, and .zshrc, and files whose first line is a #!
+naming a Bourne compatible shell, get the mode automatically.
+Add other file types with
+.Ic auto-execute ,
+for example:
+.Pp
+.Dl auto-execute .aliases shell-script-mode
+.It Ic shift-backward-char
+.It Ic shift-forward-char
+.It Ic shift-next-line
+.It Ic shift-previous-line
+.It Ic shift-beginning-of-line
+.It Ic shift-end-of-line
+.It Ic shift-backward-word
+.It Ic shift-forward-word
+.It Ic shift-backward-paragraph
+.It Ic shift-forward-paragraph
+.It Ic shift-scroll-down
+.It Ic shift-scroll-up
+Move like the unshifted command, activating the mark at dot first,
+so holding shift with the arrow, Home/End, and PgUp/PgDn keys marks
+text like in GNU Emacs, by word and paragraph with control held too.
+The first unshifted command drops the selection again; a mark set
+with C-SPC is left alone.
+Bound to the shifted keys on terminals that send xterm style
+sequences.
 .It Ic shrink-window
 Shrink current window by one line.
 The window immediately below is expanded to pick up the slack.
 If only one window is present, this command has no effect.
+.It Ic shrink-window-horizontally
+Narrow the current window, giving the columns to the window beside
+it, like in GNU Emacs.
 .It Ic space-to-tabstop
 Insert enough spaces to reach the next tab-stop position.
 By default, tab-stops occur every 8 characters.
+.It Ic split-window-horizontally
+Split the current window side by side.
+The current window becomes the left half; a window narrower than 8
+columns cannot be split.
+Rows can only be moved between windows of the same width, so
+.Ic delete-window
+and
+.Ic enlarge-window
+refuse layouts where that would misalign a neighbor;
+.Ic delete-other-windows
+always works.
+Side by side windows do not survive a change of terminal width.
 .It Ic split-window-vertically
 Split the current window.
 A window smaller than 3 lines cannot be split.
@@ -1007,6 +1297,22 @@ and switch back to alternate screen, if in use.
 Prompt and switch to a new buffer in the current window.
 .It Ic switch-to-buffer-other-window
 Switch to buffer in another window.
+.It Ic text-mode
+Toggle text mode, for prose rather than code.
+Enabling it turns on
+.Ic auto-fill-mode ,
+so typing past the fill column wraps the line.
+Plain text has no syntax rules, so nothing is colored.
+Files named *.txt and *.text get the mode automatically, as do the
+files a source tree keeps without a suffix, AUTHORS, COPYING,
+INSTALL, LICENSE, NEWS, README, THANKS and TODO, and the file
+.Xr mutt 1
+hands its editor.
+Add other file types with
+.Ic auto-execute ,
+for example:
+.Pp
+.Dl auto-execute *.rst text-mode
 .It Ic toggle-read-only
 Toggle the read-only flag on the current buffer.
 .It Ic toggle-read-only-all
@@ -1056,11 +1362,27 @@ upper case.
 .It Ic upcase-word
 Move the cursor forward by the specified number of words.
 As it moves, convert any characters to upper case.
+.It Ic use-short-answers
+Toggle accepting a single y or n in place of a spelled out yes or no
+answer to important questions, like in GNU Emacs.
+Enabled by default, unlike GNU Emacs.
 .It Ic visible-bell
 Toggle the visible bell.
 If this toggle is on, the modeline will flash.
 .It Ic visit-tags-table
 Load tags file to be used for subsequent find-tag.
+.It Ic visual-mark-mode
+Toggle visual mark mode, enabled by default.
+When enabled, the region between mark and dot is drawn in reverse
+video after
+.Ic set-mark-command ,
+.Ic mark-whole-buffer ,
+.Ic mark-paragraph ,
+and
+.Ic exchange-point-and-mark .
+The highlight is removed when the buffer is modified, the command
+is aborted with C-g, or the region is copied.
+This is transient-mark-mode in GNU Emacs.
 .It Ic what-cursor-position
 Display a bunch of useful information about the current location of
 dot.
@@ -1069,11 +1391,56 @@ and column, and approximate position of the cursor in the file (as a
 percentage) is displayed.
 The column position assumes an infinite
 position display; it does not truncate just because the screen does.
+.It Ic whitespace-cleanup
+Clean up whitespace in the buffer, as in GNU Emacs: delete trailing
+whitespace on every line and empty lines at the start and end of the
+buffer, and redo the indentation of each line with tabs and spaces, or
+with spaces alone in
+.Ic no-tab-mode ,
+at the buffer's tab width.
+With the mark set, only the lines of the region are cleaned, and their
+empty lines are kept.
+.It Ic windmove-down
+.It Ic windmove-left
+.It Ic windmove-right
+.It Ic windmove-up
+Select the window beside the current one in the given direction,
+like windmove in GNU Emacs.
+With several neighbors the topmost, or leftmost, is chosen.
+Bound to Meta and an arrow key on terminals that send xterm style
+sequences; note that some terminals grab these keys for their own
+split panes.
 .It Ic write-file
 Ask for a file name and write the contents of the current buffer to
 that file.
 Update the remembered file name and clear the buffer
 changed flag.
+.It Ic yaml-mode
+Toggle yaml mode, which selects the yaml rules for syntax
+highlighting: comments, the
+.Ql ---
+and
+.Ql ...
+document markers, list markers, the key of a key: value pair,
+quoted strings, numbers, the words YAML reads as booleans and null,
+and anchors and aliases.
+A block scalar introduced by
+.Ql |
+or
+.Ql >
+takes the lines below it, which are left as text, so a shell script under
+.Ql run: |
+is not read as YAML.
+A plain scalar is left alone, there being no way to tell one from
+prose.
+Enabling it also sets a two column tab width, turns on
+.Ic no-tab-mode ,
+since a tab is a syntax error in YAML, and enables the indent mode
+so RET keeps the indentation.
+Files named *.yml and *.yaml get the mode automatically, as do
+.Pa .clang-format
+and
+.Pa .yamllint .
 .It Ic yank
 Yank text from kill-buffer.
 Unlike emacs, the
@@ -1217,6 +1584,15 @@ Comments can be added to the startup files by placing
 or
 .Sq #
 as the first character of a line.
+.Sh ENVIRONMENT
+.Bl -tag -width MGSECURE
+.It Ev MGSECURE
+When set, in the manner of
+.Ev LESSSECURE ,
+.Nm
+runs in secure mode as if started with
+.Fl S .
+.El
 .Sh FILES
 .Bl -tag -width /usr/share/doc/mg/tutorial -compact
 .It Pa ~/.mg
@@ -1237,9 +1613,13 @@ language in which extensions can be written;
 however, keys can be rebound and certain parameters can be changed
 in startup files.
 .Pp
-In order to use 8-bit characters (such as German umlauts), the Meta key
-needs to be disabled via the
-.Ic meta-key-mode
-command.
+On terminals that signal the Meta key by setting the eighth bit,
+Meta bindings only work after enabling
+.Ic meta-key-mode .
 .Pp
-Multi-byte character sets, such as UTF-8, are not supported.
+In UTF-8 locales, multibyte characters are edited and displayed as
+single characters.
+Double-width characters occupy two columns, but combining characters
+still render incorrectly.
+Case conversion and case-insensitive search fold only ASCII in UTF-8
+locales, and mini-buffer editing still works on bytes.

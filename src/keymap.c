@@ -178,14 +178,16 @@ static PF cXcJ[] = {
 
 static PF cXlp[] = {
 	definemacro,		/* ( */
-	finishmacro		/* ) */
+	finishmacro,		/* ) */
+	rescan,			/* * */
+	balancewind		/* + */
 };
 
 static PF cX0[] = {
 	delwind,		/* 0 */
 	onlywind,		/* 1 */
 	splitwind,		/* 2 */
-	rescan,			/* 3 */
+	splitwindh,		/* 3 */
 	NULL			/* 4 */
 };
 
@@ -221,7 +223,15 @@ static PF cXcar[] = {
 	rescan,			/* r */
 	savebuffers,		/* s */
 	rescan,			/* t */
-	undo			/* u */
+	undo,			/* u */
+	rescan,			/* v */
+	rescan,			/* w */
+	rescan,			/* x */
+	rescan,			/* y */
+	rescan,			/* z */
+	shrinkwindh,		/* { */
+	rescan,			/* | */
+	enlargewindh		/* } */
 };
 
 struct KEYMAPE (6) cXmap = {
@@ -236,7 +246,7 @@ struct KEYMAPE (6) cXmap = {
 			CCHR('J'), CCHR('X'), cXcJ, NULL
 		},
 		{
-			'(', ')', cXlp, NULL
+			'(', '+', cXlp, NULL
 		},
 		{
 			'0', '4', cX0, (KEYMAP *) & cX4map
@@ -245,7 +255,7 @@ struct KEYMAPE (6) cXmap = {
 			'=', '=', cXeq, NULL
 		},
 		{
-			'^', 'u', cXcar, NULL
+			'^', '}', cXcar, NULL
 		}
 	}
 };
@@ -323,9 +333,9 @@ static PF metasqf[] = {
 static PF metal[] = {
 	lowerword,		/* l */
 	backtoindent,		/* m */
-	rescan,			/* n */
+	nexthist,		/* n */
 	rescan,			/* o */
-	rescan,			/* p */
+	prevhist,		/* p */
 	fillpara,		/* q */
 	backsearch,		/* r */
 	forwsearch,		/* s */
@@ -519,6 +529,30 @@ static PF notab_tab[] = {
 	space_to_tabstop	/* ^I */
 };
 
+static struct KEYMAPE (1) wrapmap = {
+	0,
+	1,		/* 1 to avoid 0 sized array */
+	rescan,
+	{
+		/* unused dummy entry, see the mode files */
+		{
+			(KCHAR)0, (KCHAR)0, NULL, NULL
+		}
+	}
+};
+
+static struct KEYMAPE (1) linummap = {
+	0,
+	1,		/* 1 to avoid 0 sized array */
+	rescan,
+	{
+		/* unused dummy entry, see the mode files */
+		{
+			(KCHAR)0, (KCHAR)0, NULL, NULL
+		}
+	}
+};
+
 static struct KEYMAPE (1) notabmap = {
 	1,
 	1,
@@ -546,7 +580,7 @@ static struct KEYMAPE (1) overwmap = {
 /*
  * The basic (root) keyboard map
  */
-struct maps_s	fundamental_mode = { (KEYMAP *)&fundmap, "fundamental", NULL };
+struct maps_s	fundamental_mode = { (KEYMAP *)&fundmap, "fundamental", 0, NULL };
 
 /*
  * give names to the maps, for use by help etc. If the map is to be bindable,
@@ -558,15 +592,17 @@ struct maps_s	fundamental_mode = { (KEYMAP *)&fundmap, "fundamental", NULL };
  */
 
 static struct maps_s map_table[] = {
-	{(KEYMAP *) &fillmap, "fill", NULL},
-	{(KEYMAP *) &indntmap, "indent", NULL},
-	{(KEYMAP *) &notabmap, "notab", NULL},
-	{(KEYMAP *) &overwmap, "overwrite", NULL},
-	{(KEYMAP *) &metamap, "esc prefix", NULL},
-	{(KEYMAP *) &cXmap, "c-x prefix", NULL},
-	{(KEYMAP *) &cX4map, "c-x 4 prefix", NULL},
-	{(KEYMAP *) &helpmap, "help", NULL},
-	{NULL, NULL, NULL}
+	{ .p_map = (KEYMAP *)&fillmap, .p_name = "fill", .p_minor = 1 },
+	{ .p_map = (KEYMAP *)&indntmap, .p_name = "indent", .p_minor = 1 },
+	{ .p_map = (KEYMAP *)&linummap, .p_name = "linum", .p_minor = 1 },
+	{ .p_map = (KEYMAP *)&notabmap, .p_name = "notab", .p_minor = 1 },
+	{ .p_map = (KEYMAP *)&overwmap, .p_name = "overwrite", .p_minor = 1 },
+	{ .p_map = (KEYMAP *)&wrapmap, .p_name = "wrap", .p_minor = 1 },
+	{ .p_map = (KEYMAP *)&metamap, .p_name = "esc prefix" },
+	{ .p_map = (KEYMAP *)&cXmap, .p_name = "c-x prefix" },
+	{ .p_map = (KEYMAP *)&cX4map, .p_name = "c-x 4 prefix" },
+	{ .p_map = (KEYMAP *)&helpmap, .p_name = "help" },
+	{ NULL }
 };
 
 struct maps_s *maps;
@@ -598,6 +634,7 @@ maps_add(KEYMAP *map, const char *name)
 
 	mp->p_name = name;
 	mp->p_map = map;
+	mp->p_minor = 0;	/* mode files register major modes */
 	mp->p_next = maps;
 	maps = mp;
 

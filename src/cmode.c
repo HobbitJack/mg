@@ -96,6 +96,16 @@ cmode_init(void)
 	funmap_add(cc_indent, "c-indent", 0);
 	funmap_add(cc_lfindent, "c-indent-and-newline", 0);
 	maps_add((KEYMAP *)&cmodemap, "c");
+#ifdef ENABLE_AUTOEXEC
+	(void)add_autoexec("*.c", "c-mode");
+	(void)add_autoexec("*.h", "c-mode");
+	(void)add_autoexec("*.cc", "c-mode");
+	(void)add_autoexec("*.cpp", "c-mode");
+	(void)add_autoexec("*.cxx", "c-mode");
+	(void)add_autoexec("*.hh", "c-mode");
+	(void)add_autoexec("*.hpp", "c-mode");
+	(void)add_autoexec("*.C", "c-mode");
+#endif
 }
 
 /*
@@ -143,6 +153,10 @@ int
 cc_tab(int f, int n)
 {
 	int inwhitep = FALSE;	/* In leading whitespace? */
+
+	/* an active region indents all of its lines, like GNU Emacs */
+	if (curwp->w_markact)
+		return (regionlines(cc_indent));
 
 	inwhitep = in_whitespace(curwp->w_dotp, llength(curwp->w_dotp));
 

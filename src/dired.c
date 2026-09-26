@@ -59,7 +59,9 @@ static int	 createlist(struct buffer *);
 static void	 redelete(struct buffer *);
 static char 	 *findfname(struct line *, char *);
 
-extern struct keymap_s helpmap, cXmap, metamap;
+extern struct KEYMAPE (2) helpmap;
+extern struct KEYMAPE (6) cXmap;
+extern struct KEYMAPE (8) metamap;
 
 const char DDELCHAR = 'D';
 
@@ -655,6 +657,8 @@ d_exec(int space, struct buffer *bp, const char *input, const char *cmd, ...)
 	int	 ret = (ABORT), n;
 	pid_t	 pid;
 
+	if (secure)
+		return (secure_denied());
 	if (sigaction(SIGCHLD, NULL, &olda) == -1)
 		return (ABORT);
 
@@ -942,6 +946,8 @@ dired_(char *dname)
 		ewprintf("Bad directory name");
 		return (NULL);
 	}
+	if (!secure_allowed(dname))
+		return (NULL);
 	/* this should not be done, instead adjustname() should get a flag */
 	len = strlen(dname);
 	if (dname[len - 1] != '/') {

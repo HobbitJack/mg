@@ -61,6 +61,10 @@ long long strtonum(const char *numstr, long long minval, long long maxval, const
 void   *reallocarray(void *optr, size_t nmemb, size_t size);
 #endif
 
+#ifndef HAVE_RECALLOCARRAY
+void   *recallocarray(void *optr, size_t oldnmemb, size_t newnmemb, size_t size);
+#endif
+
 #ifndef HAVE_FPARSELN
 char   *fparseln(FILE *, size_t *, size_t *, const char[3], int);
 #define FPARSELN_UNESCESC	0x01
@@ -114,7 +118,7 @@ typedef int	(*PF)(int, int);	/* generally useful type */
 #define NFILEN	1024		/* Length, file name.		 */
 #define NBUFN	NFILEN		/* Length, buffer name.		 */
 #define NLINE	256		/* Length, line.		 */
-#define PBMODES 4		/* modes per buffer		 */
+#define PBMODES 6		/* modes per buffer		 */
 #define NPAT	80		/* Length, pattern.		 */
 #define HUGE	1000		/* A rather large number.	 */
 #define NSRCH	128		/* Undoable search commands.	 */
@@ -126,6 +130,7 @@ typedef int	(*PF)(int, int);	/* generally useful type */
  * Universal.
  */
 #define FALSE	0		/* False, no, bad, etc.		 */
+#define NELEMS(a) (sizeof(a) / sizeof((a)[0]))
 #define TRUE	1		/* True, yes, good, etc.	 */
 #define ABORT	2		/* Death, ^G, abort, etc.	 */
 #define UERROR	3		/* User Error.			 */
@@ -143,6 +148,9 @@ typedef int	(*PF)(int, int);	/* generally useful type */
 #define CFCPCN	0x0001		/* Last command was C-p or C-n	 */
 #define CFKILL	0x0002		/* Last command was a kill	 */
 #define CFINS	0x0004		/* Last command was self-insert	 */
+#define CFINDT	0x0008		/* Last command was an indent cycle */
+#define CFSHIFT	0x0010		/* Last command was a shifted move */
+#define CFMARK	0x0020		/* Last command activated the mark */
 
 /*
  * File I/O.
@@ -293,12 +301,15 @@ struct mgwin {
 	int		 w_marko;	/* Byte offset for "mark"	*/
 	int		 w_toprow;	/* Origin 0 top row of window	*/
 	int		 w_ntrows;	/* # of rows of text in window	*/
+	int		 w_leftcol;	/* Origin 0 left column		*/
+	int		 w_ntcols;	/* # of columns in window	*/
 	int		 w_frame;	/* #lines to reframe by.	*/
 	char		 w_rflag;	/* Redisplay Flags.		*/
 	char		 w_flag;	/* Flags.			*/
 	struct line	*w_wrapline;
 	int		 w_dotline;	/* current line number of dot	*/
 	int		 w_markline;	/* current line number of mark	*/
+	int		 w_markact;	/* mark active, region is shown	*/
 };
 #define w_wndp	w_list.l_p.l_wp
 #define w_name	w_list.l_name
@@ -433,6 +444,7 @@ void		 ttdell(int, int, int);
 void		 ttwindow(int, int);
 void		 ttnowindow(void);
 void		 ttcolor(int);
+void		 ttattr(int, int);
 void		 ttresize(void);
 
 extern volatile sig_atomic_t winch_flag;
@@ -443,6 +455,7 @@ int		 ttraw(void);
 void		 ttclose(void);
 int		 ttcooked(void);
 int		 ttputc(int);
+int		 ttputcell(int);
 void		 ttflush(void);
 int		 ttgetc(void);
 int		 ttwait(int);
@@ -512,6 +525,19 @@ int		 nextwind(int, int);
 int		 prevwind(int, int);
 int		 onlywind(int, int);
 int		 splitwind(int, int);
+int		 splitwindh(int, int);
+int		 balancewind(int, int);
+int		 moveseam(int, int, int);
+int		 enlargewindh(int, int);
+int		 resizewindleft(int, int);
+int		 resizewindright(int, int);
+int		 resizewindup(int, int);
+int		 resizewinddown(int, int);
+int		 shrinkwindh(int, int);
+int		 windmoveleft(int, int);
+int		 windmoveright(int, int);
+int		 windmoveup(int, int);
+int		 windmovedown(int, int);
 int		 enlargewind(int, int);
 int		 shrinkwind(int, int);
 int		 delwind(int, int);
@@ -556,6 +582,8 @@ void		 update(int);
 int		 linenotoggle(int, int);
 int		 colnotoggle(int, int);
 int		 timetoggle(int, int);
+int		 visualmark(int, int);
+int		 fontlock(int, int);
 int		 timeformat(int, int);
 int		 batttoggle(int, int);
 
@@ -565,6 +593,7 @@ void		 eerase(void);
 int		 eyorn(const char *);
 int		 eynorr(const char *);
 int		 eyesno(const char *);
+int		 useshortanswers(int, int);
 void		 ewprintf(const char *fmt, ...);
 char		*eread(const char *, char *, size_t, int, ...)
 				__attribute__((__format__ (printf, 1, 5)));
@@ -576,6 +605,7 @@ int		 ffropen(FILE **, const char *, struct buffer *);
 void		 ffstat(FILE *, struct buffer *);
 int		 ffwopen(FILE **, const char *, struct buffer *);
 int		 ffclose(FILE *, struct buffer *);
+void		 ffgzclose(FILE *);
 int		 ffputbuf(FILE *, struct buffer *, int);
 int		 ffgetline(FILE *, char *, int, int *);
 int		 fbackupfile(const char *);
@@ -617,6 +647,32 @@ void		 panic(char *);
 /* cinfo.c */
 char		*getkeyname(char  *, size_t, int);
 
+/* syntax.c */
+#define SYN_NONE	0
+#define SYN_COMMENT	1
+#define SYN_KEYWORD	2
+#define SYN_TYPE	3
+#define SYN_STRING	4
+#define SYN_NUMBER	5
+#define SYN_PREPROC	6
+#define SYN_HEADING	7
+
+struct syntax;
+const struct syntax *syntax_lookup(struct buffer *);
+int		 syn_multiline(struct buffer *);
+int		 syn_parse(const struct syntax *, const struct line *,
+		     int, char *);
+int		 syn_state(const struct syntax *, struct buffer *,
+		     struct line *);
+
+/* utf8.c */
+void		 utf8_init(void);
+int		 utf8_iscont(int);
+int		 utf8_seqlen(int);
+int		 utf8_decode(const char *, int, int *);
+int		 utf8_get(const struct line *, int, int *);
+int		 utf8_width(int);
+
 /* basic.c */
 int		 gotobol(int, int);
 int		 backchar(int, int);
@@ -626,6 +682,8 @@ int		 gotobob(int, int);
 int		 gotoeob(int, int);
 int		 forwline(int, int);
 int		 backline(int, int);
+int		 prevhist(int, int);
+int		 nexthist(int, int);
 void		 setgoal(void);
 int		 getgoal(struct line *);
 int		 forwpage(int, int);
@@ -634,6 +692,7 @@ int		 forw1page(int, int);
 int		 back1page(int, int);
 int		 pagenext(int, int);
 void		 isetmark(void);
+void		 mark_deactivate(struct mgwin *);
 int		 setmark(int, int);
 int		 clearmark(int, int);
 int		 swapmark(int, int);
@@ -644,6 +703,8 @@ int		 setlineno(int);
 int		 ntabstop(int, int);
 int		 showcpos(int, int);
 int		 getcolpos(struct mgwin *);
+int		 charcols(const struct line *, int, int, int, int *);
+int		 linecols(const struct line *, int);
 int		 twiddle(int, int);
 int		 openline(int, int);
 int		 enewline(int, int);
@@ -651,9 +712,12 @@ int		 deblank(int, int);
 int		 justone(int, int);
 int		 delwhite(int, int);
 int		 delleadwhite(int, int);
+int		 wscleanup(int, int);
 int		 deltrailwhite(int, int);
 int		 lfindent(int, int);
 int		 indent(int, int);
+int		 lineindent(const struct line *, int *);
+int		 prevlineindent(struct line **);
 int		 forwdel(int, int);
 int		 backdel(int, int);
 int		 space_to_tabstop(int, int);
@@ -693,6 +757,7 @@ int		 evalexpr(int, int);
 int		 evalbuffer(int, int);
 int		 evalfile(int, int);
 int		 load(FILE *, const char *);
+void		 loadreport(void);
 int		 excline(char *, int, int);
 char		*skipwhite(char *);
 
@@ -703,6 +768,7 @@ int		 wallchart(int, int);
 int		 help_help(int, int);
 int		 apropos_command(int, int);
 int		 quickhelp(int, int);
+void		 quickresize(void);
 int		 tutorial(int, int);
 
 /* paragraph.c X */
@@ -728,6 +794,7 @@ int		 inword(void);
 int		 transposeword(int, int);
 
 /* region.c X */
+int		 regionlines(int (*)(int, int));
 int		 killregion(int, int);
 int		 copyregion(int, int);
 int		 lowerregion(int, int);
@@ -778,7 +845,12 @@ int		 applymacro(int, int);
 
 /* modes.c X */
 int		 indentmode(int, int);
+int		 buf_hasmode(struct buffer *, const char *);
 int		 fillmode(int, int);
+int		 wrapmode(int, int);
+int		 linummode(int, int);
+struct maps_s	*buf_major(struct buffer *);
+void		 modetabw(int);
 int		 notabmode(int, int);
 int		 overwrite_mode(int, int);
 int		 set_default_mode(int,int);
@@ -815,6 +887,7 @@ int		 undo(int, int);
 int		 auto_execute(int, int);
 PF		*find_autoexec(const char *);
 int		 add_autoexec(const char *, const char *);
+void		 shebang_execute(void);
 
 /* cmode.c X */
 int		 cmode(int, int);
@@ -859,6 +932,7 @@ extern int		 thisflag;
 extern int		 lastflag;
 extern int		 curgoal;
 extern int		 startrow;
+extern int		 startcol;
 extern int		 epresf;
 extern int		 sgarbf;
 extern int		 nrow;
@@ -870,11 +944,21 @@ extern int		 ttbot;
 extern int		 tthue;
 extern int		 defb_nmodes;
 extern int		 defb_flag;
+extern int		 defb_tabw;
 extern int		 doaudiblebell;
 extern int		 dovisiblebell;
 extern int		 dblspace;
 extern int		 allbro;
+extern int		 utf8_mode;
+extern int		 helpsh;
+extern int		 helpset;
 extern int		 batch;
+extern int		 secure;
+extern int		 singlefile;
+int		 secure_denied(void);
+void		 secure_allow(const char *);
+int		 secure_allowed(const char *);
+extern int		 inrc;
 extern char	 	 cinfo[];
 extern char		*keystrings[];
 extern char		 pat[NPAT];

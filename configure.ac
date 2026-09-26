@@ -1,5 +1,5 @@
 # Written by Joachim Wiberg <troglobit@gmail.com> and put in the public domain.
-AC_INIT([Mg], [3.8-pre], [https://github.com/troglobit/mg/issues], [mg])
+AC_INIT([Mg], [4.1], [https://github.com/troglobit/mg/issues], [mg])
 AC_CONFIG_AUX_DIR(build-aux)
 AM_INIT_AUTOMAKE([1.11 foreign])
 AM_SILENT_RULES([yes])
@@ -37,7 +37,7 @@ AC_CHECK_LIB([util], [login_tty])
 AC_CHECK_LIB([util], [openpty])
 
 # Check for usually missing API's, which we can replace
-AC_REPLACE_FUNCS([fparseln futimens login_tty openpty reallocarray strlcpy strlcat strtonum])
+AC_REPLACE_FUNCS([fparseln futimens login_tty openpty reallocarray recallocarray strlcpy strlcat strtonum])
 AC_CONFIG_LIBOBJ_DIR([lib])
 
 # Check for configured features

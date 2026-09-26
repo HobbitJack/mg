@@ -141,6 +141,7 @@ lchange(int flag)
 			wp->w_rflag |= flag;
 			if (wp != curwp)
 				wp->w_rflag |= WFFULL;
+			mark_deactivate(wp);
 		}
 	}
 }

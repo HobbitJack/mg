@@ -46,6 +46,7 @@ static struct funmap functnames[] = {
 	{auto_execute, "auto-execute", 2, NULL},
 #endif
 	{fillmode, "auto-fill-mode", 0, NULL},
+	{wrapmode, "line-wrap-mode", 0, NULL},
 	{indentmode, "auto-indent-mode", 0, NULL},
 	{backtoindent, "back-to-indentation", 0, NULL},
 	{backuptohomedir, "backup-to-home-directory", 0, NULL},
@@ -53,6 +54,7 @@ static struct funmap functnames[] = {
 	{delbword, "backward-kill-word", 1, NULL},
 	{gotobop, "backward-paragraph", 1, NULL},
 	{backword, "backward-word", 1, NULL},
+	{balancewind, "balance-windows", 0, NULL},
 	{gotobob, "beginning-of-buffer", 0, NULL},
 	{gotobol, "beginning-of-line", 0, NULL},
 	{showmatch, "blink-and-insert", 1, NULL},
@@ -107,6 +109,7 @@ static struct funmap functnames[] = {
 #endif
 	{batttoggle, "display-battery-mode", 0, NULL},
 	{helptoggle, "display-help-mode", 0, NULL},
+	{linummode, "display-line-numbers-mode", 0, NULL},
 	{timetoggle, "display-time-mode", 0, NULL},
 	{timeformat, "set-time-format", 1, NULL},
 	{lowerregion, "downcase-region", 0, NULL},
@@ -118,6 +121,7 @@ static struct funmap functnames[] = {
 	{gotoeol, "end-of-line", 0, NULL},
 	{endorexecmacro, "end-or-call-last-kbd-macro", 0, NULL},
 	{enlargewind, "enlarge-window", 0, NULL},
+	{enlargewindh, "enlarge-window-horizontally", 0, NULL},
 	{NULL, "esc prefix", 0, NULL},
 	{evalbuffer, "eval-current-buffer", 0, NULL},
 	{evalexpr, "eval-expression", 0, NULL},
@@ -131,6 +135,7 @@ static struct funmap functnames[] = {
 #ifdef ENABLE_CTAGS
 	{findtag, "find-tag", 1, NULL},
 #endif
+	{fontlock, "font-lock-mode", 0, NULL},
 	{forwchar, "forward-char", 1, NULL},
 	{gotoeop, "forward-paragraph", 1, NULL},
 	{forwword, "forward-word", 1, NULL},
@@ -173,6 +178,7 @@ static struct funmap functnames[] = {
 	{negative_argument, "negative-argument", 1, NULL},
 	{enewline, "newline", 1, NULL},
 	{lfindent, "newline-and-indent", 1, NULL},
+	{nexthist, "next-history-element", 0, NULL},
 	{forwline, "next-line", 1, NULL},
 	{notabmode, "no-tab-mode", 0, NULL},
 	{notmodified, "not-modified", 0, NULL},
@@ -183,6 +189,7 @@ static struct funmap functnames[] = {
 	{poptag, "pop-tag-mark", 0, NULL},
 #endif
 	{prefixregion, "prefix-region", 0, NULL},
+	{prevhist, "previous-history-element", 0, NULL},
 	{backline, "previous-line", 1, NULL},
 	{prevwind, "previous-window", 0, NULL},
 	{spawncli, "push-shell", 0, NULL},
@@ -234,7 +241,9 @@ static struct funmap functnames[] = {
 	{shellcommand, "shell-command", 1, NULL},
 	{piperegion, "shell-command-on-region", 1, NULL},
 	{shrinkwind, "shrink-window", 1, NULL},
+	{shrinkwindh, "shrink-window-horizontally", 1, NULL},
 	{space_to_tabstop, "space-to-tabstop", 0, NULL},
+	{splitwindh, "split-window-horizontally", 0, NULL},
 	{splitwind, "split-window-vertically", 0, NULL},
 	{definemacro, "start-kbd-macro", 0, NULL},
 	{spawncli, "suspend-emacs", 0, NULL},
@@ -258,11 +267,22 @@ static struct funmap functnames[] = {
 	{universal_argument, "universal-argument", 1, NULL},
 	{upperregion, "upcase-region", 0, NULL},
 	{upperword, "upcase-word", 1, NULL},
+	{useshortanswers, "use-short-answers", 0, NULL},
 	{togglevisiblebell, "visible-bell", 0, NULL},
+	{visualmark, "visual-mark-mode", 0, NULL},
 #ifdef ENABLE_CTAGS
 	{tagsvisit, "visit-tags-table", 0, NULL},
 #endif
 	{showcpos, "what-cursor-position", 0, NULL},
+	{wscleanup, "whitespace-cleanup", 0, NULL},
+	{resizewinddown, "resize-window-down", 0, NULL},
+	{resizewindleft, "resize-window-left", 0, NULL},
+	{resizewindright, "resize-window-right", 0, NULL},
+	{resizewindup, "resize-window-up", 0, NULL},
+	{windmovedown, "windmove-down", 0, NULL},
+	{windmoveleft, "windmove-left", 0, NULL},
+	{windmoveright, "windmove-right", 0, NULL},
+	{windmoveup, "windmove-up", 0, NULL},
 	{filewrite, "write-file", 1, NULL},
 	{yank, "yank", 1, NULL},
 	{NULL, NULL, 0, NULL}
@@ -341,7 +361,11 @@ complete_function_list(const char *fname)
 				free_file_list(head);
 				return (NULL);
 			}
-			el->l_name = strdup(fn->fn_name);
+			if ((el->l_name = strdup(fn->fn_name)) == NULL) {
+				free(el);
+				free_file_list(head);
+				return (NULL);
+			}
 			el->l_next = head;
 			head = el;
 		}

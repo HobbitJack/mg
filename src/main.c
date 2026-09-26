@@ -29,11 +29,15 @@ int		 thisflag;			/* flags, this command	*/
 int		 lastflag;			/* flags, last command	*/
 int		 curgoal;			/* goal column		*/
 int		 startrow;			/* row to start		*/
+int		 startcol;			/* col to start		*/
 int		 doaudiblebell;			/* audible bell toggle	*/
 int		 dovisiblebell;			/* visible bell toggle	*/
 int		 dblspace;			/* sentence end #spaces	*/
 int		 allbro;			/* all buffs read-only	*/
 int		 batch;				/* for regress tests	*/
+int		 secure;			/* -S: no exec, no rc	*/
+int		 singlefile;			/* -s: argv files only	*/
+int		 inrc;				/* reading the startup file */
 struct buffer	*curbp;				/* current buffer	*/
 struct buffer	*bheadp;			/* BUFFER list head	*/
 struct mgwin	*curwp;				/* current window	*/
@@ -48,8 +52,8 @@ extern void	 closetags(void);
 static __dead void
 usage(int code)
 {
-	fprintf(stderr, "usage: %s [-hnR] [-b file] [-f mode] [-u file] "
-	    "[+number] [file ...]\n",
+	fprintf(stderr, "usage: %s [-hnRsS] [-b file] [-f mode] [-u file] "
+	    "[+number] [+number:col] [file ...]\n",
 	    PACKAGE_NAME);
 	exit(code);
 }
@@ -65,13 +69,17 @@ main(int argc, char **argv)
 	int	 	 o, i, nfiles;
 	int	  	 nobackups = 0;
 	struct buffer	*bp = NULL;
+	struct mgwin	*wp, *selwp;
 
 #ifdef __OpenBSD__
 	if (pledge("stdio rpath wpath cpath fattr chown getpw tty proc exec", NULL) == -1)
 		err(1, "pledge");
 #endif
 
-	while ((o = getopt(argc, argv, "hnRb:f:u:")) != -1)
+	if (getenv("MGSECURE") != NULL)
+		secure = 1;
+
+	while ((o = getopt(argc, argv, "hnRsSb:f:u:")) != -1)
 		switch (o) {
 		case 'b':
 			batch = 1;
@@ -79,6 +87,13 @@ main(int argc, char **argv)
 			break;
 		case 'R':
 			allbro = 1;
+			break;
+		case 's':
+			singlefile = 1;
+			nobackups = 1;
+			break;
+		case 'S':
+			secure = 1;
 			break;
 		case 'n':
 			nobackups = 1;
@@ -105,11 +120,15 @@ main(int argc, char **argv)
                     PACKAGE_NAME);
                 exit(1);
 	}
+	if ((secure || singlefile) && (batch || conffile != NULL))
+		errx(1, "-b and -u are not allowed with -s or -S");
 	if (batch) {
 		pty_init();
 		conffile = batchfile;
 	}
-	if ((ffp = startupfile(NULL, conffile, file, sizeof(file))) == NULL &&
+	if (secure || singlefile)
+		ffp = NULL;
+	else if ((ffp = startupfile(NULL, conffile, file, sizeof(file))) == NULL &&
 	    conffile != NULL) {
 		fprintf(stderr, "%s: Problem with file: %s\n", PACKAGE_NAME,
 		    conffile);
@@ -120,6 +139,7 @@ main(int argc, char **argv)
 	argv += optind;
 
 	setlocale(LC_CTYPE, "");
+	utf8_init();
 
 	maps_init();		/* Keymaps and modes.		*/
 	funmap_init();		/* Functions.			*/
@@ -137,6 +157,15 @@ main(int argc, char **argv)
 		extern void grep_init(void);
 		extern void dired_init(void);
 		extern void cmode_init(void);
+		extern void confmode_init(void);
+		extern void diffmode_init(void);
+		extern void gitmode_init(void);
+		extern void textmode_init(void);
+		extern void yamlmode_init(void);
+		extern void shmode_init(void);
+		extern void mdmode_init(void);
+		extern void mkmode_init(void);
+		extern void pymode_init(void);
 
 #ifdef ENABLE_DIRED
 		dired_init();
@@ -147,6 +176,15 @@ main(int argc, char **argv)
 #ifdef ENABLE_CMODE
 		cmode_init();
 #endif
+		confmode_init();
+		diffmode_init();
+		gitmode_init();
+		textmode_init();
+		yamlmode_init();
+		shmode_init();
+		mdmode_init();
+		mkmode_init();
+		pymode_init();
 	}
 
 	if (init_fcn_name &&
@@ -169,7 +207,9 @@ main(int argc, char **argv)
 
 	/* user startup file. */
 	if (ffp != NULL) {
+		inrc = 1;
 		(void)load(ffp, file);
+		inrc = 0;
 		ffclose(ffp, NULL);
 	}
 
@@ -185,10 +225,15 @@ main(int argc, char **argv)
 	 */
 	for (bp = bheadp; bp != NULL; bp = bp->b_bufp) {
 		bp->b_flag = defb_flag;
+		bp->b_tabw = defb_tabw;
+		bp->b_nmodes = defb_nmodes;
 		for (i = 0; i <= defb_nmodes; i++) {
                 	bp->b_modes[i] = defb_modes[i];
         	}
 	}
+	/* the modes were drawn before the startup file was read */
+	for (wp = wheadp; wp != NULL; wp = wp->w_wndp)
+		wp->w_rflag |= WFMODE;
 
 	/* Force FFOTHARG=1 so that this mode is enabled, not simply toggled */
 	if (init_fcn)
@@ -203,13 +248,36 @@ main(int argc, char **argv)
 			const char *errstr;
 
 			lval = strtonum(&argv[i][1], INT_MIN, INT_MAX, &errstr);
-			if (argv[i][1] == '\0' || errstr != NULL)
+			if (argv[i][1] == '\0' || errstr != NULL) {
+				/* Maybe +LINE:COLUMN format */
+				char *colon;
+
+				colon = strchr(&argv[i][1], ':');
+				if (colon != NULL && colon != &argv[i][1]) {
+					*colon = '\0';
+					lval = strtonum(&argv[i][1],
+					    INT_MIN, INT_MAX, &errstr);
+					if (errstr != NULL)
+						goto notnum;
+					startrow = lval;
+					colon++;
+					if (*colon != '\0') {
+						lval = strtonum(colon,
+						    0, INT_MAX, &errstr);
+						if (errstr == NULL)
+							startcol = (int)lval;
+					}
+					continue;
+				}
 				goto notnum;
+			}
 			startrow = lval;
 		} else {
 notnum:
 			cp = adjustname(argv[i], FALSE);
 			if (cp != NULL) {
+				if (singlefile)
+					secure_allow(cp);
 				if (nfiles == 1)
 					splitwind(0, 1);
 
@@ -239,7 +307,29 @@ notnum:
 	if (nfiles > 2)
 		listbuffers(0, 1);
 
-	ewprintf(" %s", hlp);
+	update(CMODE);
+
+	/* The files just read report their line counts over it, issue #41 */
+	loadreport();
+
+	/*
+	 * The startup help is a courtesy to beginners: dismiss it on
+	 * the first key press, or after ten seconds, unless the user
+	 * asked to keep it with display-help-mode.  Anything already in
+	 * the echo line outranks it.
+	 */
+	if (epresf != FALSE) {
+		if (helpset == FALSE)
+			helpsh = FALSE;
+	} else if (helpsh == TRUE) {
+		ewprintf(" %s", hlp);
+		update(CMODE);	/* park the cursor in the buffer */
+		if (helpset == FALSE) {
+			(void)ttwait(10000);
+			helpsh = FALSE;
+			eerase();
+		}
+	}
 
 	/* fake last flags */
 	thisflag = 0;
@@ -255,6 +345,7 @@ notnum:
 		update(CMODE);
 		lastflag = thisflag;
 		thisflag = 0;
+		selwp = curwp;
 
 		switch (doin()) {
 		case TRUE:
@@ -266,6 +357,17 @@ notnum:
 		default:
 			macrodef = FALSE;
 		}
+
+		/*
+		 * The first unshifted command drops a shift selection,
+		 * in the window it was made in: the command may have
+		 * switched away from it, or deleted it.
+		 */
+		if ((lastflag & CFSHIFT) != 0 &&
+		    (thisflag & (CFSHIFT | CFMARK)) == 0)
+			for (wp = wheadp; wp != NULL; wp = wp->w_wndp)
+				if (wp == selwp)
+					mark_deactivate(wp);
 	}
 }
 
@@ -346,5 +448,6 @@ quit(int f, int n)
 int
 ctrlg(int f, int n)
 {
+	mark_deactivate(curwp);
 	return (ABORT);
 }

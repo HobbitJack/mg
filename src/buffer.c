@@ -363,7 +363,8 @@ listbuffers(int f, int n)
 	struct mgwin		*wp;
 
 	if (!initialized) {
-		maps_add((KEYMAP *)&listbufmap, "listbufmap");
+		if (maps_add((KEYMAP *)&listbufmap, "buffer-list") != TRUE)
+			return (FALSE);
 		initialized = 1;
 	}
 
@@ -372,7 +373,7 @@ listbuffers(int f, int n)
 	wp->w_dotp = bp->b_dotp; /* fix up if window already on screen */
 	wp->w_doto = bp->b_doto;
 	bp->b_modes[0] = name_mode("fundamental");
-	bp->b_modes[1] = name_mode("listbufmap");
+	bp->b_modes[1] = name_mode("buffer-list");
 	bp->b_nmodes = 1;
 
 	return (TRUE);
@@ -721,6 +722,7 @@ showbuffer(struct buffer *bp, struct mgwin *wp, int flags)
 	}
 	/* Now, attach the new buffer to the window */
 	wp->w_bufp = bp;
+	wp->w_markact = FALSE;
 
 	if (bp->b_nwnd++ == 0) {	/* First use.		 */
 		wp->w_dotp = bp->b_dotp;
@@ -781,23 +783,36 @@ popbuf(struct buffer *bp, int flags)
 
 	if (bp->b_nwnd == 0) {	/* Not on screen yet.	 */
 		/*
-		 * Pick a window for a pop-up.
-		 * If only one window, split the screen.
-		 * Flag the new window as ephemeral
+		 * Pick a window for a pop-up: one above or below in
+		 * the same columns, so side by side windows are left
+		 * alone; otherwise split the current window, and the
+		 * pop-up appears beside it.  Flag a new window as
+		 * ephemeral.
 		 */
-		if (wheadp->w_wndp == NULL &&
-		    splitwind(FFOTHARG, flags) == FALSE)
- 			return (NULL);
-
-		/*
-		 * Pick the uppermost window that isn't
-		 * the current window. An LRU algorithm
-		 * might be better. Return a pointer, or NULL on error.
-		 */
-		wp = wheadp;
-
-		while (wp != NULL && wp == curwp)
-			wp = wp->w_wndp;
+		for (wp = wheadp; wp != NULL; wp = wp->w_wndp)
+			if (wp != curwp &&
+			    wp->w_leftcol == curwp->w_leftcol &&
+			    wp->w_ntcols == curwp->w_ntcols)
+				break;
+		if (wp == NULL) {
+			if (splitwind(FFOTHARG, flags) != FALSE) {
+				for (wp = wheadp; wp != NULL;
+				     wp = wp->w_wndp)
+					if (wp != curwp &&
+					    wp->w_leftcol ==
+					    curwp->w_leftcol &&
+					    wp->w_ntcols ==
+					    curwp->w_ntcols)
+						break;
+			} else if (wheadp->w_wndp == NULL) {
+				return (NULL);
+			} else {
+				/* cannot split: take another window */
+				wp = wheadp;
+				while (wp != NULL && wp == curwp)
+					wp = wp->w_wndp;
+			}
+		}
 	} else {
 		for (wp = wheadp; wp != NULL; wp = wp->w_wndp) {
 			if (wp->w_bufp == bp) {

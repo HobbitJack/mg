@@ -21,47 +21,135 @@ int	 defb_nmodes = 0;
 struct maps_s	*defb_modes[PBMODES] = { &fundamental_mode };
 int	 defb_flag = 0;
 
+/*
+ * True when the buffer has the named mode enabled.
+ */
+int
+buf_hasmode(struct buffer *bp, const char *name)
+{
+	struct maps_s	*m;
+	int	 i;
+
+	if ((m = name_mode(name)) == NULL)
+		return (FALSE);
+	for (i = 0; i <= bp->b_nmodes; i++)
+		if (bp->b_modes[i] == m)
+			return (TRUE);
+	return (FALSE);
+}
+
+/*
+ * The mode that names the buffer: the last one that is not merely a
+ * qualifier, or fundamental when there is no other.
+ */
+struct maps_s *
+buf_major(struct buffer *bp)
+{
+	struct maps_s	*m = bp->b_modes[0];
+	int		 i;
+
+	for (i = 1; i <= bp->b_nmodes; i++)
+		if (!bp->b_modes[i]->p_minor)
+			m = bp->b_modes[i];
+	return (m);
+}
+
+/*
+ * Set, clear, or toggle a buffer flag, on the defaults while the
+ * startup file is being read and on the current buffer otherwise.
+ */
+static void
+modeflag(int bit, int on)
+{
+	int	 flag = inrc ? defb_flag : curbp->b_flag;
+
+	if (on < 0)
+		flag ^= bit;
+	else if (on)
+		flag |= bit;
+	else
+		flag &= ~bit;
+
+	if (inrc)
+		defb_flag = flag;
+	else
+		curbp->b_flag = flag;
+}
+
+/*
+ * Set the tab width a mode wants, on the defaults while the startup
+ * file is being read and on the current buffer otherwise.
+ */
+void
+modetabw(int n)
+{
+	if (inrc)
+		defb_tabw = n;
+	else
+		curbp->b_tabw = n;
+}
+
+/*
+ * A mode named in the startup file is meant for the files opened
+ * afterwards, not for *scratch*, which is the only buffer there is
+ * at the time, so it goes on the defaults instead.
+ */
 int
 changemode(int f, int n, char *newmode)
 {
-	int	 i;
-	struct maps_s	*m;
+	int	 i, nmodes;
+	struct maps_s	*m, **modes;
+	struct mgwin	*wp;
 
 	if ((m = name_mode(newmode)) == NULL) {
 		dobeep();
 		ewprintf("Can't find mode %s", newmode);
 		return (FALSE);
 	}
+	if (inrc) {
+		modes = defb_modes;
+		nmodes = defb_nmodes;
+	} else {
+		modes = curbp->b_modes;
+		nmodes = curbp->b_nmodes;
+	}
 	if (!(f & FFARG)) {
-		for (i = 0; i <= curbp->b_nmodes; i++)
-			if (curbp->b_modes[i] == m) {
+		for (i = 0; i <= nmodes; i++)
+			if (modes[i] == m) {
 				/* mode already set */
 				n = 0;
 				break;
 			}
 	}
 	if (n > 0) {
-		for (i = 0; i <= curbp->b_nmodes; i++)
-			if (curbp->b_modes[i] == m)
+		for (i = 0; i <= nmodes; i++)
+			if (modes[i] == m)
 				/* mode already set */
 				return (TRUE);
-		if (curbp->b_nmodes >= PBMODES - 1) {
+		if (nmodes >= PBMODES - 1) {
 			dobeep();
 			ewprintf("Too many modes");
 			return (FALSE);
 		}
-		curbp->b_modes[++(curbp->b_nmodes)] = m;
+		modes[++nmodes] = m;
 	} else {
-		/* fundamental is b_modes[0] and can't be unset */
-		for (i = 1; i <= curbp->b_nmodes && m != curbp->b_modes[i];
-		    i++);
-		if (i > curbp->b_nmodes)
+		/* fundamental is modes[0] and can't be unset */
+		for (i = 1; i <= nmodes && m != modes[i]; i++)
+			;
+		if (i > nmodes)
 			return (TRUE);	/* mode wasn't set */
-		for (; i < curbp->b_nmodes; i++)
-			curbp->b_modes[i] = curbp->b_modes[i + 1];
-		curbp->b_nmodes--;
+		for (; i < nmodes; i++)
+			modes[i] = modes[i + 1];
+		nmodes--;
 	}
-	upmodes(curbp);
+	if (inrc)
+		defb_nmodes = nmodes;
+	else
+		curbp->b_nmodes = nmodes;
+	/* the modes decide the syntax highlighting, redraw */
+	for (wp = wheadp; wp != NULL; wp = wp->w_wndp)
+		if (wp->w_bufp == curbp)
+			wp->w_rflag |= WFMODE | WFFULL;
 	return (TRUE);
 }
 
@@ -77,18 +165,48 @@ fillmode(int f, int n)
 	return (changemode(f, n, "fill"));
 }
 
+/*
+ * Toggle a mode that changes how much text fits in a window, so the
+ * windows showing the buffer must be framed again.
+ */
+static int
+reframemode(int f, int n, char *name)
+{
+	struct mgwin	*wp;
+
+	if (changemode(f, n, name) != TRUE)
+		return (FALSE);
+	for (wp = wheadp; wp != NULL; wp = wp->w_wndp)
+		if (wp->w_bufp == curbp)
+			wp->w_rflag |= WFFRAME | WFFULL;
+	return (TRUE);
+}
+
+/*
+ * Wrap a line too long for the window onto the lines below it,
+ * rather than truncating it at the right edge.
+ */
+int
+wrapmode(int f, int n)
+{
+	return (reframemode(f, n, "wrap"));
+}
+
+/*
+ * Show the number of each line in a gutter at the left of the text.
+ */
+int
+linummode(int f, int n)
+{
+	return (reframemode(f, n, "linum"));
+}
+
 int
 notabmode(int f, int n)
 {
 	if (changemode(f, n, "notab") == FALSE)
 		return (FALSE);
-	if (f & FFARG) {
-		if (n <= 0)
-			curbp->b_flag &= ~BFNOTAB;
-		else
-			curbp->b_flag |= BFNOTAB;
-	} else
-		curbp->b_flag ^= BFNOTAB;
+	modeflag(BFNOTAB, (f & FFARG) ? n > 0 : -1);
 	return (TRUE);
 }
 
@@ -97,13 +215,7 @@ overwrite_mode(int f, int n)
 {
 	if (changemode(f, n, "overwrite") == FALSE)
 		return (FALSE);
-	if (f & FFARG) {
-		if (n <= 0)
-			curbp->b_flag &= ~BFOVERWRITE;
-		else
-			curbp->b_flag |= BFOVERWRITE;
-	} else
-		curbp->b_flag ^= BFOVERWRITE;
+	modeflag(BFOVERWRITE, (f & FFARG) ? n > 0 : -1);
 	return (TRUE);
 }
 

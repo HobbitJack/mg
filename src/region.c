@@ -389,6 +389,34 @@ region_put_data(const char *buf, int len)
 }
 
 /*
+ * Run a function once for every line the region touches, with dot
+ * at the start of the line.  A region ending in column zero does
+ * not reach onto that last line.  Dot is left on the last line.
+ */
+int
+regionlines(int (*fn)(int, int))
+{
+	int	 last, s;
+
+	if (curwp->w_markp == NULL) {
+		dobeep();
+		ewprintf("No mark set in this window");
+		return (FALSE);
+	}
+	if (curwp->w_dotline > curwp->w_markline)
+		(void)swapmark(FFRAND, 0);
+	last = curwp->w_markline;
+	if (curwp->w_marko == 0 && last > curwp->w_dotline)
+		last--;
+	(void)gotobol(FFRAND, 1);
+	while ((s = fn(FFRAND, 1)) == TRUE && curwp->w_dotline < last) {
+		(void)forwline(FFRAND, 1);
+		(void)gotobol(FFRAND, 1);
+	}
+	return (s);
+}
+
+/*
  * Mark whole buffer by first traversing to end-of-buffer
  * and then to beginning-of-buffer. Mark, dot are implicitly
  * set to eob, bob respectively during traversal.
@@ -401,6 +429,8 @@ markbuffer(int f, int n)
 	(void) clearmark(f, n);
 	if (gotobob(f,n) == FALSE)
 		return (FALSE);
+	curwp->w_markact = TRUE;
+	thisflag |= CFMARK;
 	return (TRUE);
 }
 
@@ -479,6 +509,10 @@ shellcmdoutput(char* const cmd, char* const text, int len,
 	char	*shellp;
 	int	 tbo, ret, special = 0;
 
+	if (secure) {
+		free(text);
+		return (secure_denied());
+	}
 	if (bp == NULL) {
 		special = 1;
 		bp = bfind("*Shell Command Output*", TRUE);
@@ -540,6 +574,8 @@ pipeio(const char* const path, char* const argv[], char* const text, int len,
 	int s[2], ret;
 	pid_t pid;
 
+	if (secure)
+		return (secure_denied());
 	if (socketpair(AF_UNIX, SOCK_STREAM, PF_UNSPEC, s) == -1) {
 		dobeep();
 		ewprintf("socketpair error");

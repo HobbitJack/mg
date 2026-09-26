@@ -60,8 +60,12 @@ backchar(int f, int n)
 			curwp->w_doto = llength(lp);
 			curwp->w_rflag |= WFMOVE;
 			curwp->w_dotline--;
-		} else
+		} else {
 			curwp->w_doto--;
+			while (curwp->w_doto > 0 && utf8_mode &&
+			    utf8_iscont(lgetc(curwp->w_dotp, curwp->w_doto)))
+				curwp->w_doto--;
+		}
 	}
 	return (TRUE);
 }
@@ -102,8 +106,13 @@ forwchar(int f, int n)
 			curwp->w_doto = 0;
 			curwp->w_dotline++;
 			curwp->w_rflag |= WFMOVE;
-		} else
+		} else {
 			curwp->w_doto++;
+			while (curwp->w_doto < llength(curwp->w_dotp) &&
+			    utf8_mode &&
+			    utf8_iscont(lgetc(curwp->w_dotp, curwp->w_doto)))
+				curwp->w_doto++;
+		}
 	}
 	return (TRUE);
 }
@@ -116,8 +125,10 @@ forwchar(int f, int n)
 int
 gotobob(int f, int n)
 {
-	if (!curwp->w_markp)
-		(void) setmark(f, n);
+	if (!curwp->w_markp) {
+		isetmark();
+		ewprintf("Mark set");
+	}
 	curwp->w_dotp = bfirstlp(curbp);
 	curwp->w_doto = 0;
 	curwp->w_rflag |= WFFULL;
@@ -143,8 +154,10 @@ gotoeob(int f, int n)
 	int		 ln;
 	struct line	*lp;
 
-	if (!curwp->w_markp)
-		(void) setmark(f, n);
+	if (!curwp->w_markp) {
+		isetmark();
+		ewprintf("Mark set");
+	}
 	curwp->w_dotp = blastlp(curbp);
 	curwp->w_doto = llength(curwp->w_dotp);
 	curwp->w_dotline = curwp->w_bufp->b_lines;
@@ -270,20 +283,10 @@ setgoal(void)
 int
 getgoal(struct line *dlp)
 {
-	int c, i, col = 0;
-	char tmp[5];
+	int i, len, col = 0;
 
-	for (i = 0; i < llength(dlp); i++) {
-		c = lgetc(dlp, i);
-		if (c == '\t') {
-			col = ntabstop(col, curbp->b_tabw);
-		} else if (ISCTRL(c) != FALSE) {
-			col += 2;
-		} else if (isprint(c))
-			col++;
-		else {
-			col += snprintf(tmp, sizeof(tmp), "\\%o", c);
-		}
+	for (i = 0; i < llength(dlp); i += len) {
+		col += charcols(dlp, i, col, curbp->b_tabw, &len);
 		if (col > curgoal)
 			break;
 	}
@@ -438,6 +441,7 @@ isetmark(void)
 	curwp->w_markp = curwp->w_dotp;
 	curwp->w_marko = curwp->w_doto;
 	curwp->w_markline = curwp->w_dotline;
+	curwp->w_markact = FALSE;
 }
 
 /*
@@ -449,8 +453,23 @@ int
 setmark(int f, int n)
 {
 	isetmark();
+	curwp->w_markact = TRUE;
+	thisflag |= CFMARK;
 	ewprintf("Mark set");
 	return (TRUE);
+}
+
+/*
+ * Deactivate the mark; hiding the region needs a full repaint of
+ * the window.
+ */
+void
+mark_deactivate(struct mgwin *wp)
+{
+	if (wp->w_markact) {
+		wp->w_markact = FALSE;
+		wp->w_rflag |= WFFULL;
+	}
 }
 
 /* Clear the mark, if set. */
@@ -463,6 +482,7 @@ clearmark(int f, int n)
 	curwp->w_markp = NULL;
 	curwp->w_marko = 0;
 	curwp->w_markline = 0;
+	mark_deactivate(curwp);
 
 	return (TRUE);
 }
@@ -492,6 +512,8 @@ swapmark(int f, int n)
 	curwp->w_markp = odotp;
 	curwp->w_marko = odoto;
 	curwp->w_markline = odotline;
+	curwp->w_markact = TRUE;
+	thisflag |= CFMARK;
 	curwp->w_rflag |= WFMOVE;
 	return (TRUE);
 }

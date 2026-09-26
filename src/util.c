@@ -101,25 +101,51 @@ showcpos(int f, int n)
 int
 getcolpos(struct mgwin *wp)
 {
-	int	col, i, c;
-	char tmp[5];
+	int	col, i, len;
 
-	/* determine column */
 	col = 0;
+	for (i = 0; i < wp->w_doto; i += len)
+		col += charcols(wp->w_dotp, i, col, wp->w_bufp->b_tabw, &len);
 
-	for (i = 0; i < wp->w_doto; ++i) {
-		c = lgetc(wp->w_dotp, i);
-		if (c == '\t') {
-			col = ntabstop(col, wp->w_bufp->b_tabw);
-		} else if (ISCTRL(c) != FALSE)
-			col += 2;
-		else if (isprint(c)) {
-			col++;
-		} else {
-			col += snprintf(tmp, sizeof(tmp), "\\%o", c);
-		}
+	return (col);
+}
 
-	}
+/*
+ * The columns the character at offset o takes, and its length in bytes
+ * through len.  A tab depends on where it starts, so col is the column
+ * the character begins at.
+ */
+int
+charcols(const struct line *lp, int o, int col, int tabw, int *len)
+{
+	char	 tmp[5];
+	int	 c, cp;
+
+	*len = 1;
+	c = lgetc(lp, o);
+	if (c >= 0x80 && (cp = utf8_get(lp, o, len)) != -1)
+		return (utf8_width(cp));
+	if (c == '\t')
+		return (ntabstop(col, tabw) - col);
+	if (ISCTRL(c) != FALSE)
+		return (2);
+	if (isprint(c))
+		return (1);
+	return (snprintf(tmp, sizeof(tmp), "\\%o", c));
+}
+
+/*
+ * The width of a whole line in columns.
+ */
+int
+linecols(const struct line *lp, int tabw)
+{
+	int	 col, i, len;
+
+	col = 0;
+	for (i = 0; i < llength(lp); i += len)
+		col += charcols(lp, i, col, tabw, &len);
+
 	return (col);
 }
 
@@ -314,7 +340,9 @@ delleadwhite(int f, int n)
 	soff -= ls;
 	if (soff < 0)
 		soff = 0;
-	(void)forwchar(FFRAND, soff);
+	/* soff is a byte offset; forwchar() counts characters */
+	curwp->w_doto = soff;
+	curwp->w_rflag |= WFMOVE;
 
 	return (TRUE);
 }
@@ -359,6 +387,102 @@ doindent(int cols)
 }
 
 /*
+ * Whether the i bytes of indentation on lp are what doindent(col)
+ * writes: the tabs, then the spaces.
+ */
+static int
+isindent(const struct line *lp, int col, int i)
+{
+	int	 j, tabs;
+
+	tabs = (curbp->b_flag & BFNOTAB) ? 0 : col / curbp->b_tabw;
+	if (i != tabs + col - tabs * curbp->b_tabw)
+		return (FALSE);
+	for (j = 0; j < i; j++)
+		if (lgetc(lp, j) != (j < tabs ? '\t' : ' '))
+			return (FALSE);
+	return (TRUE);
+}
+
+/*
+ * Clean up the line dot is on: delete trailing blanks and redo the
+ * indentation when it is not what doindent() would write.
+ */
+static int
+wsline(int f, int n)
+{
+	struct line	*lp = curwp->w_dotp;
+	int	 col, i, len;
+
+	len = llength(lp);
+	while (len > 0 && isblank(lgetc(lp, len - 1)))
+		len--;
+	if (len < llength(lp)) {
+		curwp->w_doto = len;
+		if (ldelete(llength(lp) - len, KNONE) != TRUE)
+			return (FALSE);
+	}
+	col = lineindent(lp, &i);
+	if (i > 0 && i < llength(lp) && !isindent(lp, col, i)) {
+		curwp->w_doto = 0;
+		if (ldelete(i, KNONE) != TRUE || doindent(col) != TRUE)
+			return (FALSE);
+	}
+	return (TRUE);
+}
+
+/*
+ * Clean up whitespace the way whitespace-cleanup does in GNU Emacs:
+ * trailing blanks go from every line, empty lines from the start and
+ * end of the buffer, and the indentation of each line is redone with
+ * tabs and spaces, or spaces alone in no-tab mode.  With the mark set
+ * only the lines of the region are cleaned, and their empty lines are
+ * left alone.
+ */
+int
+wscleanup(int f, int n)
+{
+	struct line	*lp;
+	int	 dotline, doto, k, s;
+
+	dotline = curwp->w_dotline;
+	doto = curwp->w_doto;
+	undo_boundary_enable(FFRAND, 0);
+	if (curwp->w_markact && curwp->w_markp != NULL)
+		s = regionlines(wsline);
+	else {
+		setlineno(1);
+		while ((s = wsline(FFRAND, 1)) == TRUE &&
+		    curwp->w_dotline < curbp->b_lines) {
+			(void)forwline(FFRAND, 1);
+			(void)gotobol(FFRAND, 1);
+		}
+		/* the empty lines at the start, and all but one at the end */
+		for (k = 0, lp = lforw(curbp->b_headp);
+		    lforw(lp) != curbp->b_headp && llength(lp) == 0; lp = lforw(lp))
+			k++;
+		if (s == TRUE && k > 0) {
+			setlineno(1);
+			s = ldelete(k, KNONE);
+			dotline -= k;
+		}
+		while (s == TRUE && lback(lp = lback(curbp->b_headp)) != curbp->b_headp &&
+		    llength(lp) == 0 && llength(lback(lp)) == 0) {
+			curwp->w_dotp = lback(lp);
+			curwp->w_doto = 0;
+			s = ldelete(1, KNONE);
+		}
+	}
+	undo_boundary_enable(FFRAND, 1);
+
+	/* back to where dot was, as far as the line still goes */
+	setlineno(dotline < 1 ? 1 : dotline);
+	curwp->w_doto = doto < llength(curwp->w_dotp) ?
+	    doto : llength(curwp->w_dotp);
+	return (s);
+}
+
+/*
  * Insert a newline, then enough tabs and spaces to duplicate the indentation
  * of the previous line, respecting no-tab-mode and the buffer tab width.
  * Figure out the indentation of the current line.  Insert a newline by
@@ -369,7 +493,7 @@ doindent(int cols)
 int
 lfindent(int f, int n)
 {
-	int	c, i, nicol;
+	int	nicol;
 	int	s = TRUE;
 
 	if (n < 0)
@@ -377,16 +501,7 @@ lfindent(int f, int n)
 
 	undo_boundary_enable(FFRAND, 0);
 	while (n--) {
-		nicol = 0;
-		for (i = 0; i < llength(curwp->w_dotp); ++i) {
-			c = lgetc(curwp->w_dotp, i);
-			if (c != ' ' && c != '\t')
-				break;
-			if (c == '\t')
-				nicol = ntabstop(nicol, curwp->w_bufp->b_tabw);
-			else
-				++nicol;
-		}
+		nicol = lineindent(curwp->w_dotp, NULL);
 		delwhite(FFRAND, 1);
 		if (lnewline() == FALSE || doindent(nicol) == FALSE) {
 			s = FALSE;
@@ -395,6 +510,54 @@ lfindent(int f, int n)
 	}
 	undo_boundary_enable(FFRAND, 1);
 	return (s);
+}
+
+/*
+ * The indentation column of the line.  Sets *ip, when given, to
+ * the offset of the first character after the indentation.
+ */
+int
+lineindent(const struct line *lp, int *ip)
+{
+	int	 c, col, i;
+
+	col = 0;
+	for (i = 0; i < llength(lp); i++) {
+		c = lgetc(lp, i);
+		if (c == ' ')
+			col++;
+		else if (c == '\t')
+			col = ntabstop(col, curbp->b_tabw);
+		else
+			break;
+	}
+	if (ip != NULL)
+		*ip = i;
+	return (col);
+}
+
+/*
+ * The indentation column of the previous non-blank line, zero when
+ * there is none.  Sets *lpp, when given, to the line found, or to
+ * the buffer head line.
+ */
+int
+prevlineindent(struct line **lpp)
+{
+	struct line	*lp;
+	int	 col, i;
+
+	col = 0;
+	for (lp = lback(curwp->w_dotp); lp != curbp->b_headp;
+	     lp = lback(lp)) {
+		col = lineindent(lp, &i);
+		if (i < llength(lp))
+			break;		/* non-blank line found */
+		col = 0;
+	}
+	if (lpp != NULL)
+		*lpp = lp;
+	return (col);
 }
 
 /*
@@ -422,11 +585,45 @@ indent(int f, int n)
 	if ( doindent(n) == FALSE)
 		return (FALSE);
 
-	(void)forwchar(FFRAND, soff);
+	/* soff is a byte offset; forwchar() counts characters */
+	curwp->w_doto += soff;
+	curwp->w_rflag |= WFMOVE;
 
 	return (TRUE);
 }
 
+
+/*
+ * Number of bytes taken by the n characters after byte offset o on
+ * line lp.  The implied newline at the end of a line is one byte and
+ * a UTF-8 sequence is one character.  Counts past the end of buffer
+ * so that ldelete() fails there, just as a plain byte count does.
+ */
+static RSIZE
+forwbytes(struct line *lp, int o, int n)
+{
+	RSIZE	 bytes = 0;
+	int	 len;
+
+	while (n-- > 0) {
+		if (o == llength(lp)) {
+			if (lforw(lp) == curbp->b_headp) {
+				bytes += n + 1;
+				break;
+			}
+			lp = lforw(lp);
+			o = 0;
+			bytes++;
+		} else if (utf8_get(lp, o, &len) != -1) {
+			o += len;
+			bytes += len;
+		} else {
+			o++;
+			bytes++;
+		}
+	}
+	return (bytes);
+}
 
 /*
  * Delete forward.  This is real easy, because the basic delete routine does
@@ -447,7 +644,8 @@ forwdel(int f, int n)
 		thisflag |= CFKILL;
 	}
 
-	return (ldelete((RSIZE) n, (f & FFARG) ? KFORW : KNONE));
+	return (ldelete(forwbytes(curwp->w_dotp, curwp->w_doto, n),
+	    (f & FFARG) ? KFORW : KNONE));
 }
 
 /*
@@ -470,7 +668,8 @@ backdel(int f, int n)
 		thisflag |= CFKILL;
 	}
 	if ((s = backchar(f | FFRAND, n)) == TRUE)
-		s = ldelete((RSIZE)n, (f & FFARG) ? KFORW : KNONE);
+		s = ldelete(forwbytes(curwp->w_dotp, curwp->w_doto, n),
+		    (f & FFARG) ? KFORW : KNONE);
 
 	return (s);
 }

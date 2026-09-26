@@ -1,3 +1,108 @@
+mg2a (4.1) unstable; urgency=medium
+
+  * New language modes: conf, diff, git-commit, makefile, text, and yaml.
+    A mode is picked from the file name, or the #! line, and sets the
+    buffer up for it: hard tabs for makefiles, spaces for python and YAML
+  * git-commit-mode binds C-c C-c to finish the commit, C-c C-k to cancel
+    it, and C-c C-s to add a Signed-off-by trailer
+  * New command line-wrap-mode: a line too long for the window continues
+    on the rows below instead of being truncated at the edge
+  * Double-width characters take the two terminal columns they are drawn
+    in, from PR #42 by popflag; widths follow Unicode 17
+  * The mode line names the major mode where it used to say Fundamental
+  * Shift + PgUp/PgDn mark text a page at a time, completing the
+    shift-select support from 4.0
+  * shell-script-mode is also detected for *.bash, *.ksh, *.zsh and rc
+    files; auto-execute patterns now match the file's basename too
+  * A mode named in ~/.mg becomes the default for the files opened
+    afterwards, along with the tab width the mode asks for
+  * A buffer holds six modes rather than four, so a major mode bringing
+    two helpers of its own is no longer dropped
+  * Fix marking text with shifted keys in VTE-based terminals when built
+    --without-curses
+  * Report errors in the startup file again, issue #41
+  * markdown-mode no longer colors the indented continuation lines of a
+    list item as a verbatim block
+
+ -- Joachim Wiberg <troglobit@gmail.com>  Mon, 07 Sep 2026 12:18:35 +0200
+
+mg2a (4.0) unstable; urgency=medium
+
+  * Initial UTF-8 support, active in UTF-8 locales: multibyte characters
+    display as single characters, cursor motion and delete operate on
+    whole characters, and files round trip byte for byte
+  * 8-bit character input works out of the box: meta-key-mode is now
+    disabled by default, use (meta-key-mode 1) in ~/.mg for old behavior
+  * Character class table updated from DEC multinational to Latin-1
+  * Shift + arrow keys mark text like in GNU Emacs, by word and
+    paragraph with control held; xterm style terminals
+  * Meta + arrow keys move between windows, Meta + Shift + arrows
+    resize them; new commands enlarge/shrink-window-horizontally
+    on C-x } and C-x {
+  * Pop-ups open below the current window in side by side layouts;
+    the quick help closes with q, keeping the window layout
+  * M-q reflows one list item at a time and refills block quotes
+  * M-g g and M-g M-g run goto-line, like newer GNU Emacs
+  * New visual mark mode: the region between mark and dot is drawn in
+    reverse video, like transient-mark-mode in GNU Emacs.  New command
+    visual-mark-mode toggles it, enabled by default
+  * Syntax highlighting of comments, strings, keywords, types, numbers,
+    and preprocessor directives in buffers with a language mode, such
+    as c-mode.  New command font-lock-mode toggles it
+  * New command shell-script-mode with shell highlighting rules, tab
+    width 8 with hard tabs, and RET keeps the indent; enabled
+    automatically for *.sh files and #!-lines naming a shell
+  * New command python-mode with python highlighting rules including
+    triple-quoted strings and decorators; four column indent steps,
+    spaces only, smart TAB that cycles indent levels when repeated;
+    enabled for *.py files and #! python
+  * New command markdown-mode with markdown highlighting rules:
+    headings in bold, code blocks, quotes, lists, emphasis, and
+    links; enabled automatically for *.md and *.markdown files
+  * New command split-window-horizontally, bound to C-x 3 like GNU
+    Emacs: side by side windows, freely mixed with C-x 2
+  * Resizing the terminal grows or shrinks the focused window; other
+    windows keep their size, and side by side layouts survive
+  * New command balance-windows, bound to C-x + like GNU Emacs:
+    evens out the window heights in any layout
+  * New command require-final-newline <nil | T | ask>
+  * New command use-short-answers: a single y or n answers important
+    questions, enabled by default; from PR #37 by Glubbfreund
+  * The startup help text is dismissed on the first key press, or
+    after ten seconds; keep it with display-help-mode 1 in ~/.mg
+  * Smart TAB in buffers with a language mode: indents the current
+    line, or the region lines when the mark is active
+  * New command dired-up-directory, bound to ^, from OpenBSD
+  * C-u M-! and C-u M-| insert shell command output in the current
+    buffer, from OpenBSD
+  * c-mode: respect user defined tab width in indentation, by Daniel
+    Hennigar
+  * Sync with OpenBSD, as of March 3, 2026: replace-regexp fixes, memory
+    leak fixes, strdup() failure handling, -flto build fix
+  * Fix auto-indent-mode with custom tab widths, from OpenBSD
+  * Packaging: modernize for debhelper 13, drop obsolete menu file
+
+ -- Joachim Wiberg <troglobit@gmail.com>  Fri, 10 Jul 2026 13:04:46 +0200
+
+mg2a (3.7) unstable; urgency=medium
+
+  * New command display-help-toggle, ensures the quick-help text is
+    always shown in the status area, enabled by default
+  * New command apply-macro-to-region-lines, by Ben Scuron
+  * New command end-or-call-last-kbd-macro, used in key bindings
+  * Map function keys F1-F4 + F10 to common functions
+  * Sync with OpenBSD as of April 21, 2023:
+    + Add command set-tab-width to change per-buffer tab width
+    + Sync manual changes: grammar, visual improvements
+    + Fixes to no-tab-mode: indent next line with spaces
+    + Fix buffer overflow when no match is found for a search
+  * Drop support for disabling no-tab-mode when calling configure
+    script, not needed anymore since it is enabled by default upstream
+  * Fix Home/End key for builds both with and without curses
+  * Fix current markline not reset after being cleared, by Ben Scuron
+
+ -- Joachim Wiberg <troglobit@gmail.com>  Sun, 13 Aug 2023 17:31:28 +0200
+
 mg2a (3.6) unstable; urgency=medium
 
   * Add support for exuberant/universal Ctags tags file format
